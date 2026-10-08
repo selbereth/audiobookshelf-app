@@ -2,6 +2,15 @@
   <div id="epub-frame" class="w-full">
     <div id="viewer" class="h-full w-full"></div>
 
+    <!-- TTS controls -->
+    <div v-if="ttsActive" class="fixed left-0 w-full h-12 px-4 flex items-center justify-center space-x-4 z-20" :class="isLightTheme ? 'bg-gray-100 text-black' : isDarkTheme ? 'bg-[#2e2e2e] text-white' : 'bg-[#111] text-white'" :style="{ bottom: isPlayerOpen ? '152px' : '32px' }" @touchstart.stop @touchend.stop>
+      <button type="button" class="flex" @click.stop="ttsSkip(-1)"><span class="material-symbols text-2xl">skip_previous</span></button>
+      <button type="button" class="flex" @click.stop="ttsTogglePlay"><span class="material-symbols text-3xl">{{ ttsPlaying ? 'pause' : 'play_arrow' }}</span></button>
+      <button type="button" class="flex" @click.stop="ttsSkip(1)"><span class="material-symbols text-2xl">skip_next</span></button>
+      <button type="button" class="text-sm w-12" @click.stop="ttsCycleRate">{{ ttsRate }}x</button>
+      <button type="button" class="flex" @click.stop="stopTts"><span class="material-symbols text-2xl">close</span></button>
+    </div>
+
     <div class="fixed left-0 h-8 w-full px-4 flex items-center" :class="isLightTheme ? 'bg-white text-black' : isDarkTheme ? 'bg-[#232323] text-white/80' : 'bg-black text-white/80'" :style="{ bottom: isPlayerOpen ? '120px' : '0px' }">
       <p v-if="totalLocations" class="text-xs text-slate-600">Location {{ currentLocationNum }} of {{ totalLocations }}</p>
       <div class="flex-grow" />
@@ -12,6 +21,9 @@
 
 <script>
 import ePub from 'epubjs'
+import { AbsTts, AbsAudioPlayer } from '@/plugins/capacitor'
+import { sentenceStream } from '@/utils/tts/sentenceStream'
+import { ChunkSender } from '@/utils/tts/chunkSender'
 
 export default {
   props: {
@@ -35,6 +47,14 @@ export default {
       currentLocationCfi: null,
       inittingDisplay: true,
       isRefreshingUI: false,
+      ttsActive: false,
+      ttsPlaying: false,
+      ttsRate: 1,
+      ttsStreamId: 0,
+      ttsHighlightCfi: null,
+      ttsListeners: [],
+      ttsSender: null,
+      ttsSentenceCfis: {},
       ereaderSettings: {
         theme: 'dark',
         font: 'serif',
@@ -126,6 +146,135 @@ export default {
     }
   },
   methods: {
+    /** ---- Text to speech ---- */
+    async toggleTts() {
+      if (this.ttsActive) return this.stopTts()
+      return this.startTts()
+    },
+    ttsCreateSender(startCfi) {
+      this.ttsSender?.cancel()
+      this.ttsStreamId++
+      const streamId = this.ttsStreamId
+      const startSpine = this.book.spine.get(startCfi)?.index || 0
+      const signal = { cancelled: false }
+      const stream = sentenceStream(this.book, { startSpine, startCfi, signal })
+      const sender = new ChunkSender({
+        stream,
+        streamId,
+        send: (chunk) => AbsTts.appendChunk(chunk)
+      })
+      const cancel = sender.cancel.bind(sender)
+      sender.cancel = () => {
+        signal.cancelled = true
+        cancel()
+      }
+      this.ttsSender = sender
+      return sender
+    },
+    async startTts() {
+      if (!this.book || !this.rendition) return
+      // Only one audio source at a time
+      try {
+        await AbsAudioPlayer.pausePlayer?.()
+      } catch (error) {
+        console.warn('[EpubReader] failed to pause audio player', error)
+      }
+
+      const startCfi = this.rendition.currentLocation()?.start?.cfi || this.currentLocationCfi
+      const metadata = this.book.packaging?.metadata || {}
+      this.ttsActive = true
+
+      this.ttsListeners = [
+        await AbsTts.addListener('sentence', (data) => this.onTtsSentence(data)),
+        await AbsTts.addListener('state', (data) => {
+          this.ttsPlaying = !!data.playing
+        }),
+        await AbsTts.addListener('needMore', () => {
+          if (this.ttsSender && !this.ttsSender.running && !this.ttsSender.done) this.ttsSender.run()
+        }),
+        await AbsTts.addListener('ended', () => this.stopTts()),
+        await AbsTts.addListener('error', (data) => {
+          console.error('[EpubReader] TTS error', data)
+          this.$toast.error(data.message || 'Text to speech error')
+        })
+      ]
+
+      const sender = this.ttsCreateSender(startCfi)
+      await AbsTts.start({
+        libraryItemId: this.libraryItemId,
+        localLibraryItemId: this.localLibraryItemId,
+        title: this.libraryItem?.media?.metadata?.title || metadata.title || '',
+        author: this.libraryItem?.media?.metadata?.authorName || metadata.creator || '',
+        lang: metadata.language,
+        rate: this.ttsRate,
+        pitch: 1,
+        streamId: this.ttsStreamId
+      })
+      sender.run()
+      await AbsTts.play()
+    },
+    async stopTts() {
+      this.ttsSender?.cancel()
+      this.ttsSender = null
+      this.ttsListeners.forEach((l) => l.remove())
+      this.ttsListeners = []
+      this.clearTtsHighlight()
+      this.ttsActive = false
+      this.ttsPlaying = false
+      await AbsTts.stop()
+    },
+    async ttsTogglePlay() {
+      if (this.ttsPlaying) await AbsTts.pause()
+      else await AbsTts.play()
+    },
+    ttsSkip(count) {
+      AbsTts.skip({ by: 'sentence', count })
+    },
+    ttsCycleRate() {
+      const rates = [0.75, 1, 1.25, 1.5, 2, 2.5, 3]
+      const idx = rates.indexOf(this.ttsRate)
+      this.ttsRate = rates[(idx + 1) % rates.length]
+      AbsTts.setRate({ rate: this.ttsRate })
+    },
+    clearTtsHighlight() {
+      if (this.ttsHighlightCfi) {
+        try {
+          this.rendition.annotations.remove(this.ttsHighlightCfi, 'highlight')
+        } catch (error) {
+          console.warn('[EpubReader] failed to remove highlight', error)
+        }
+        this.ttsHighlightCfi = null
+      }
+    },
+    onTtsSentence({ cfi }) {
+      if (!this.rendition || !cfi) return
+      this.clearTtsHighlight()
+      try {
+        this.rendition.annotations.highlight(cfi, {}, null, 'tts-highlight', { fill: 'yellow', 'fill-opacity': '0.35', 'mix-blend-mode': 'normal' })
+        this.ttsHighlightCfi = cfi
+      } catch (error) {
+        console.warn('[EpubReader] failed to highlight', error)
+      }
+      // Follow along: turn the page when the sentence is outside the visible range
+      const loc = this.rendition.currentLocation()
+      if (loc?.start && loc?.end) {
+        const compare = new ePub.CFI()
+        const before = compare.compare(cfi, loc.start.cfi) < 0
+        const after = compare.compare(cfi, loc.end.cfi) > 0
+        if (before || after) this.rendition.display(cfi)
+      }
+    },
+    async syncTtsOnResume() {
+      if (!this.ttsActive) return
+      const state = await AbsTts.getState()
+      if (!state.active) {
+        this.ttsActive = false
+        this.ttsPlaying = false
+        return
+      }
+      this.ttsPlaying = state.playing
+      if (state.currentCfi) this.onTtsSentence({ cfi: state.currentCfi })
+    },
     updateSettings(settings) {
       this.ereaderSettings = settings
 
@@ -414,6 +563,9 @@ export default {
 
       this.isRefreshingUI = false
     },
+    onVisibilityChange() {
+      if (!document.hidden) this.syncTtsOnResume()
+    },
     refreshUI() {
       if (this.rendition?.resize) {
         this.rendition.resize(window.innerWidth, window.innerHeight - this.readerHeightOffset)
@@ -430,8 +582,10 @@ export default {
       document.addEventListener('orientationchange', this.screenOrientationChange)
     }
     window.addEventListener('resize', this.screenOrientationChange)
+    document.addEventListener('visibilitychange', this.onVisibilityChange)
   },
   beforeDestroy() {
+    if (this.ttsActive) this.stopTts()
     this.book?.destroy()
 
     if (screen.orientation) {
@@ -441,6 +595,7 @@ export default {
       document.removeEventListener('orientationchange', this.screenOrientationChange)
     }
     window.removeEventListener('resize', this.screenOrientationChange)
+    document.removeEventListener('visibilitychange', this.onVisibilityChange)
   }
 }
 </script>

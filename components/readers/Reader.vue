@@ -10,6 +10,9 @@
         <button v-if="isComic || isEpub" type="button" class="inline-flex mx-2" @click.stop="clickTOCBtn">
           <span class="material-symbols text-2xl text-fg">format_list_bulleted</span>
         </button>
+        <button v-if="isEpub" type="button" class="inline-flex mx-2" @click.stop="clickTtsBtn">
+          <span class="material-symbols text-2xl text-fg">headphones</span>
+        </button>
         <button v-if="isEpub" type="button" class="inline-flex mx-2" @click.stop="clickSettingsBtn">
           <span class="material-symbols text-2xl text-fg">settings</span>
         </button>
@@ -350,6 +353,10 @@ export default {
 
       this.initWatchVolume()
       this.initKeepScreenAwake()
+    },
+    clickTtsBtn() {
+      this.hideToolbar()
+      this.$refs.readerComponent?.toggleTts?.()
     },
     goToChapter(href) {
       this.showTOCModal = false
