@@ -15,7 +15,10 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -38,6 +41,17 @@ class TtsService : Service() {
     const val EXTRA_AUTHOR = "author"
 
     @Volatile var instance: TtsService? = null
+
+    /**
+     * Stops the service. `instance` is cleared at once so nothing (a new session, the audiobook hand-off)
+     * can pick up a service that is shutting down, and the JS side is told here rather than from onDestroy.
+     */
+    fun requestStop(reason: String = "stopped") {
+      val service = instance ?: return
+      instance = null
+      eventListener?.onState(false, reason)
+      service.stopSelf()
+    }
     /** Set by the plugin so events reach JS; reapplied when the service is created */
     @Volatile var eventListener: TtsController.Listener? = null
   }
@@ -57,17 +71,33 @@ class TtsService : Service() {
     }
   }
 
+  /** Paused by a temporary focus loss (a call, a navigation prompt): resume when it is given back */
+  private var resumeOnFocusGain = false
+
   private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
     when (change) {
-      AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+      AudioManager.AUDIOFOCUS_LOSS -> {
+        resumeOnFocusGain = false
         if (controller.playing) controller.pause("focus")
+      }
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+        if (controller.playing) {
+          resumeOnFocusGain = true
+          controller.pause("focus")
+        }
+      }
+      AudioManager.AUDIOFOCUS_GAIN -> {
+        if (resumeOnFocusGain) {
+          resumeOnFocusGain = false
+          controller.play()
+        }
       }
     }
   }
 
   private val forwardingListener = object : TtsController.Listener {
     override fun onSentence(s: TtsSentence) {
-      updateSession()
+      // The notification does not show the sentence: rebuilding it for every one would be wasted work
       eventListener?.onSentence(s)
     }
     override fun onState(playing: Boolean, reason: String?) {
@@ -76,6 +106,9 @@ class TtsService : Service() {
       eventListener?.onState(playing, reason)
     }
     override fun onNeedMore(streamId: Int, lastSeq: Int) { eventListener?.onNeedMore(streamId, lastSeq) }
+    override fun onSleepTimer(remainingMs: Long, running: Boolean, atChapterEnd: Boolean) {
+      eventListener?.onSleepTimer(remainingMs, running, atChapterEnd)
+    }
     override fun onEnded() {
       releaseResources()
       updateSession()
@@ -101,7 +134,7 @@ class TtsService : Service() {
         override fun onSkipToPrevious() { this@TtsService.controller.skip("sentence", -1) }
         override fun onFastForward() { this@TtsService.controller.skip("paragraph", 1) }
         override fun onRewind() { this@TtsService.controller.skip("paragraph", -1) }
-        override fun onStop() { stopSelf() }
+        override fun onStop() { requestStop() }
       })
       isActive = true
     }
@@ -110,7 +143,7 @@ class TtsService : Service() {
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     when (intent?.action) {
       ACTION_STOP -> {
-        stopSelf()
+        requestStop()
         return START_NOT_STICKY
       }
       ACTION_START -> {
@@ -121,6 +154,56 @@ class TtsService : Service() {
     }
     updateSession()
     return START_NOT_STICKY
+  }
+
+  // --- Sleep timer: lives in the service so it still fires with the screen off ---
+  private val sleepHandler = Handler(Looper.getMainLooper())
+  private var sleepEndsAt = 0L // SystemClock.elapsedRealtime, 0 = no timer
+  private val sleepRunnable = Runnable {
+    sleepEndsAt = 0
+    controller.pause("sleep")
+    eventListener?.onSleepTimer(0, false, false)
+  }
+
+  fun setSleepTimer(ms: Long) {
+    cancelSleepTimer(notify = false)
+    sleepEndsAt = SystemClock.elapsedRealtime() + ms
+    sleepHandler.postDelayed(sleepRunnable, ms)
+    eventListener?.onSleepTimer(ms, true, false)
+  }
+
+  /** Pause when the current chapter (spine item) is finished */
+  fun setSleepAtChapterEnd() {
+    cancelSleepTimer(notify = false)
+    controller.sleepSpine = controller.currentSentence?.spine
+    eventListener?.onSleepTimer(0, controller.sleepSpine != null, true)
+  }
+
+  fun adjustSleepTimer(deltaMs: Long) {
+    if (sleepEndsAt == 0L) return
+    val remaining = (sleepEndsAt - SystemClock.elapsedRealtime() + deltaMs).coerceAtLeast(1000)
+    setSleepTimer(remaining)
+  }
+
+  fun cancelSleepTimer(notify: Boolean = true) {
+    sleepHandler.removeCallbacks(sleepRunnable)
+    sleepEndsAt = 0
+    controller.sleepSpine = null
+    if (notify) eventListener?.onSleepTimer(0, false, false)
+  }
+
+  /** Media button routed here from the audiobook session callback while TTS owns playback */
+  fun handleMediaKey(keyCode: Int) {
+    when (keyCode) {
+      android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> startPlayback()
+      android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> controller.pause()
+      android.view.KeyEvent.KEYCODE_HEADSETHOOK, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (controller.playing) controller.pause() else startPlayback()
+      android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> controller.skip("sentence", 1)
+      android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> controller.skip("sentence", -1)
+      android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> controller.skip("paragraph", 1)
+      android.view.KeyEvent.KEYCODE_MEDIA_REWIND -> controller.skip("paragraph", -1)
+      android.view.KeyEvent.KEYCODE_MEDIA_STOP -> requestStop()
+    }
   }
 
   /** Request audio focus then play. */
@@ -226,12 +309,23 @@ class TtsService : Service() {
     return builder.build()
   }
 
+  /** The app was swiped away: the JS side that feeds and displays this session is gone, so stop with it */
+  override fun onTaskRemoved(rootIntent: Intent?) {
+    controller.pause()
+    // "removed" lets the JS side keep the session so it can be offered again when the app is reopened
+    requestStop("removed")
+    super.onTaskRemoved(rootIntent)
+  }
+
   override fun onDestroy() {
+    // requestStop() already told the JS side. Only the system killing the service gets here with instance still set
+    if (instance === this) eventListener?.onState(false, "stopped")
+    sleepHandler.removeCallbacks(sleepRunnable)
     releaseResources()
     controller.release()
     session.isActive = false
     session.release()
-    instance = null
+    if (instance === this) instance = null
     super.onDestroy()
   }
 

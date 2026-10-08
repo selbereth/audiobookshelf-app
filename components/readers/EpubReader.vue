@@ -2,15 +2,6 @@
   <div id="epub-frame" class="w-full">
     <div id="viewer" class="h-full w-full"></div>
 
-    <!-- TTS controls -->
-    <div v-if="ttsActive" class="fixed left-0 w-full h-12 px-4 flex items-center justify-center space-x-4 z-20" :class="isLightTheme ? 'bg-gray-100 text-black' : isDarkTheme ? 'bg-[#2e2e2e] text-white' : 'bg-[#111] text-white'" :style="{ bottom: isPlayerOpen ? '152px' : '32px' }" @touchstart.stop @touchend.stop>
-      <button type="button" class="flex" @click.stop="ttsSkip(-1)"><span class="material-symbols text-2xl">skip_previous</span></button>
-      <button type="button" class="flex" @click.stop="ttsTogglePlay"><span class="material-symbols text-3xl">{{ ttsPlaying ? 'pause' : 'play_arrow' }}</span></button>
-      <button type="button" class="flex" @click.stop="ttsSkip(1)"><span class="material-symbols text-2xl">skip_next</span></button>
-      <button type="button" class="text-sm w-12" @click.stop="ttsCycleRate">{{ ttsRate }}x</button>
-      <button type="button" class="flex" @click.stop="stopTts"><span class="material-symbols text-2xl">close</span></button>
-    </div>
-
     <div class="fixed left-0 h-8 w-full px-4 flex items-center" :class="isLightTheme ? 'bg-white text-black' : isDarkTheme ? 'bg-[#232323] text-white/80' : 'bg-black text-white/80'" :style="{ bottom: isPlayerOpen ? '120px' : '0px' }">
       <p v-if="totalLocations" class="text-xs text-slate-600">Location {{ currentLocationNum }} of {{ totalLocations }}</p>
       <div class="flex-grow" />
@@ -21,9 +12,7 @@
 
 <script>
 import ePub from 'epubjs'
-import { AbsTts, AbsAudioPlayer } from '@/plugins/capacitor'
-import { sentenceStream } from '@/utils/tts/sentenceStream'
-import { ChunkSender } from '@/utils/tts/chunkSender'
+import ttsSession from '@/utils/tts/ttsSession'
 
 export default {
   props: {
@@ -47,14 +36,8 @@ export default {
       currentLocationCfi: null,
       inittingDisplay: true,
       isRefreshingUI: false,
-      ttsActive: false,
-      ttsPlaying: false,
-      ttsRate: 1,
-      ttsStreamId: 0,
       ttsHighlightCfi: null,
-      ttsListeners: [],
-      ttsSender: null,
-      ttsSentenceCfis: {},
+      ttsHandler: null,
       ereaderSettings: {
         theme: 'dark',
         font: 'serif',
@@ -91,10 +74,18 @@ export default {
       return null
     },
     isPlayerOpen() {
-      return this.$store.getters['getIsPlayerOpen']
+      // The audiobook player or the read-aloud player is showing at the bottom
+      return this.$store.getters['getIsPlayerOpen'] || this.$store.state.tts.active
     },
     readerHeightOffset() {
       return this.isPlayerOpen ? 204 : 104
+    },
+    /** Read-aloud is running for this book */
+    ttsActive() {
+      const tts = this.$store.state.tts
+      if (!tts.active) return false
+      // The downloaded copy and the server's copy of the same book have different ids
+      return tts.libraryItemId === this.libraryItemId || (!!tts.serverLibraryItemId && tts.serverLibraryItemId === this.serverLibraryItemId) || (!!tts.localLibraryItemId && tts.localLibraryItemId === this.localLibraryItemId)
     },
     /** @returns {Array<ePub.NavItem>} */
     chapters() {
@@ -146,95 +137,40 @@ export default {
     }
   },
   methods: {
-    /** ---- Text to speech ---- */
+    /** ---- Text to speech: the session itself is global (utils/tts/ttsSession.js), the reader only highlights ---- */
     async toggleTts() {
-      if (this.ttsActive) return this.stopTts()
+      // A session restored after the app was closed has nothing running: start reading from this page instead
+      if (this.ttsActive && !this.$store.state.tts.restored) return ttsSession.playPause()
       return this.startTts()
-    },
-    ttsCreateSender(startCfi) {
-      this.ttsSender?.cancel()
-      this.ttsStreamId++
-      const streamId = this.ttsStreamId
-      const startSpine = this.book.spine.get(startCfi)?.index || 0
-      const signal = { cancelled: false }
-      const stream = sentenceStream(this.book, { startSpine, startCfi, signal })
-      const sender = new ChunkSender({
-        stream,
-        streamId,
-        send: (chunk) => AbsTts.appendChunk(chunk)
-      })
-      const cancel = sender.cancel.bind(sender)
-      sender.cancel = () => {
-        signal.cancelled = true
-        cancel()
-      }
-      this.ttsSender = sender
-      return sender
     },
     async startTts() {
       if (!this.book || !this.rendition) return
-      // Only one audio source at a time
-      try {
-        await AbsAudioPlayer.pausePlayer?.()
-      } catch (error) {
-        console.warn('[EpubReader] failed to pause audio player', error)
-      }
-
       const startCfi = this.rendition.currentLocation()?.start?.cfi || this.currentLocationCfi
-      const metadata = this.book.packaging?.metadata || {}
-      this.ttsActive = true
-
-      this.ttsListeners = [
-        await AbsTts.addListener('sentence', (data) => this.onTtsSentence(data)),
-        await AbsTts.addListener('state', (data) => {
-          this.ttsPlaying = !!data.playing
-        }),
-        await AbsTts.addListener('needMore', () => {
-          if (this.ttsSender && !this.ttsSender.running && !this.ttsSender.done) this.ttsSender.run()
-        }),
-        await AbsTts.addListener('ended', () => this.stopTts()),
-        await AbsTts.addListener('error', (data) => {
-          console.error('[EpubReader] TTS error', data)
-          this.$toast.error(data.message || 'Text to speech error')
-        })
-      ]
-
-      const sender = this.ttsCreateSender(startCfi)
-      await AbsTts.start({
-        libraryItemId: this.libraryItemId,
-        localLibraryItemId: this.localLibraryItemId,
-        title: this.libraryItem?.media?.metadata?.title || metadata.title || '',
-        author: this.libraryItem?.media?.metadata?.authorName || metadata.creator || '',
-        lang: metadata.language,
-        rate: this.ttsRate,
-        pitch: 1,
-        streamId: this.ttsStreamId
+      // The session takes over the book so the text keeps being produced after the reader is closed
+      this.attachTtsHandler()
+      await ttsSession.start({
+        book: this.book,
+        bookFromReader: true,
+        startCfi,
+        meta: {
+          libraryItem: this.libraryItem,
+          localLibraryItem: this.localLibraryItem,
+          url: this.url,
+          isLocal: this.isLocal,
+          serverLibraryItemId: this.serverLibraryItemId,
+          localLibraryItemId: this.localLibraryItemId,
+          keepProgress: this.keepProgress,
+          progress: this.progress
+        }
       })
-      sender.run()
-      await AbsTts.play()
     },
-    async stopTts() {
-      this.ttsSender?.cancel()
-      this.ttsSender = null
-      this.ttsListeners.forEach((l) => l.remove())
-      this.ttsListeners = []
-      this.clearTtsHighlight()
-      this.ttsActive = false
-      this.ttsPlaying = false
-      await AbsTts.stop()
-    },
-    async ttsTogglePlay() {
-      if (this.ttsPlaying) await AbsTts.pause()
-      else await AbsTts.play()
-    },
-    ttsSkip(count) {
-      AbsTts.skip({ by: 'sentence', count })
-    },
-    ttsCycleRate() {
-      const rates = [0.75, 1, 1.25, 1.5, 2, 2.5, 3]
-      const idx = rates.indexOf(this.ttsRate)
-      this.ttsRate = rates[(idx + 1) % rates.length]
-      AbsTts.setRate({ rate: this.ttsRate })
+    attachTtsHandler() {
+      if (this.ttsHandler) return
+      this.ttsHandler = {
+        onSentence: (data) => this.onTtsSentence(data),
+        onStopped: () => this.clearTtsHighlight()
+      }
+      ttsSession.attachReader(this.ttsHandler)
     },
     clearTtsHighlight() {
       if (this.ttsHighlightCfi) {
@@ -266,14 +202,8 @@ export default {
     },
     async syncTtsOnResume() {
       if (!this.ttsActive) return
-      const state = await AbsTts.getState()
-      if (!state.active) {
-        this.ttsActive = false
-        this.ttsPlaying = false
-        return
-      }
-      this.ttsPlaying = state.playing
-      if (state.currentCfi) this.onTtsSentence({ cfi: state.currentCfi })
+      const state = await ttsSession.getState()
+      if (state.active && state.currentCfi) this.onTtsSentence({ cfi: state.currentCfi })
     },
     updateSettings(settings) {
       this.ereaderSettings = settings
@@ -484,6 +414,9 @@ export default {
         if (this.savedEbookLocation && reader.book.spine.get(this.savedEbookLocation)) {
           displayCfi = this.savedEbookLocation
         }
+        // Read aloud is running for this book: open where it is reading now, not at the last saved position
+        const ttsCfi = this.ttsActive && !this.$store.state.tts.restored ? ttsSession.currentCfi : null
+        if (ttsCfi && reader.book.spine.get(ttsCfi)) displayCfi = ttsCfi
 
         reader.rendition.on('displayed', async () => {
           console.log('%c [EpubReader] Rendition displayed', 'color:blue;')
@@ -534,6 +467,11 @@ export default {
         reader.rendition.display(displayCfi).then(() => {
           reader.rendition.display(displayCfi).then(() => {
             this.inittingDisplay = false
+            // Read-aloud may already be running for this book (reader was closed and reopened)
+            if (this.ttsActive) {
+              this.attachTtsHandler()
+              this.syncTtsOnResume()
+            }
           })
         })
       })
@@ -585,8 +523,12 @@ export default {
     document.addEventListener('visibilitychange', this.onVisibilityChange)
   },
   beforeDestroy() {
-    if (this.ttsActive) this.stopTts()
-    this.book?.destroy()
+    // Read-aloud keeps playing after the reader is closed: the session owns the book
+    if (this.ttsHandler) ttsSession.detachReader(this.ttsHandler)
+    // Only the views are torn down: rendition.destroy() would clear rendition.book which epub.js hooks still use while the session reads
+    // (A restored session has not opened a book: nothing else uses this one)
+    if (this.ttsActive && !this.$store.state.tts.restored) this.rendition?.manager?.destroy()
+    else this.book?.destroy()
 
     if (screen.orientation) {
       // Not available on ios

@@ -3,6 +3,7 @@ import { registerPlugin, WebPlugin } from '@capacitor/core'
 class AbsTtsWeb extends WebPlugin {
   async start() {}
   async appendChunk() {}
+  async prependChunk() {}
   async play() {}
   async pause() {}
   async stop() {}
@@ -12,6 +13,9 @@ class AbsTtsWeb extends WebPlugin {
   async setRate() {}
   async setPitch() {}
   async setVoice() {}
+  async setSleepTimer() {}
+  async adjustSleepTimer() {}
+  async cancelSleepTimer() {}
   async getVoices() {
     return { voices: [] }
   }

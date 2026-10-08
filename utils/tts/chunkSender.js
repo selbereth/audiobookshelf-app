@@ -3,7 +3,7 @@
  * Chunks are independent of chapter boundaries. The first chunk is small so speech starts quickly.
  */
 
-const FIRST_CHUNK_SENTENCES = 4
+const FIRST_CHUNK_SENTENCES = 4 // sentences after the start location in the first chunk
 const CHUNK_SENTENCES = 50
 const CHUNK_BYTES = 8000
 
@@ -16,7 +16,11 @@ export class ChunkSender {
    * @param {number} params.streamId
    * @param {(chunk: object) => Promise<any>} params.send - delivers a chunk to native
    */
-  constructor({ stream, streamId, send }) {
+  constructor({ stream, streamId, send, onError, expectStart = true }) {
+    this.onError = onError
+    /** Producing the text failed part way: not the same as being done, so the native queue must not be told the book ended */
+    this.failed = false
+    this.expectStart = expectStart
     this.stream = stream
     this.streamId = streamId
     this.send = send
@@ -33,14 +37,19 @@ export class ChunkSender {
     this.running = true
     let batch = []
     let bytes = 0
+    let startId = null // id of the sentence to start speaking from
+    let sentAfterStart = 0
     try {
       for await (const sentence of this.stream) {
         if (this.cancelled) return
         batch.push(sentence)
         bytes += sentence.text.length
-        const limit = this.seq === 0 ? FIRST_CHUNK_SENTENCES : CHUNK_SENTENCES
-        if (batch.length >= limit || bytes >= CHUNK_BYTES) {
-          await this.flush(batch, false)
+        if (sentence.atStart) startId = sentence.id
+        if (startId !== null && sentence.id >= startId) sentAfterStart++
+        // The first chunk holds the rewind history plus a few sentences after the start so speech starts quickly
+        const ready = this.seq === 0 ? (startId !== null ? sentAfterStart >= FIRST_CHUNK_SENTENCES : !this.expectStart && batch.length >= FIRST_CHUNK_SENTENCES) : batch.length >= CHUNK_SENTENCES || bytes >= CHUNK_BYTES
+        if (ready) {
+          await this.flush(batch, false, this.seq === 0 ? startId : null)
           batch = []
           bytes = 0
           await yieldToEventLoop()
@@ -48,17 +57,21 @@ export class ChunkSender {
       }
       if (this.cancelled) return
       this.done = true
-      await this.flush(batch, true)
+      await this.flush(batch, true, this.seq === 0 ? startId : null)
     } catch (error) {
       console.error('[tts] ChunkSender failed', error)
+      this.failed = true
+      this.onError?.(error)
     } finally {
       this.running = false
     }
   }
 
-  async flush(sentences, done) {
+  async flush(sentences, done, startId = null) {
     if (this.cancelled) return
-    await this.send({ streamId: this.streamId, seq: this.seq++, sentences, done })
+    const chunk = { streamId: this.streamId, seq: this.seq++, sentences, done }
+    if (startId !== null) chunk.startId = startId
+    await this.send(chunk)
   }
 
   cancel() {

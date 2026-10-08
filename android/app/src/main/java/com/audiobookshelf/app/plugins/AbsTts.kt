@@ -4,6 +4,8 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import com.audiobookshelf.app.MainActivity
+import com.audiobookshelf.app.player.PlayerNotificationService
 import com.audiobookshelf.app.tts.TtsController
 import com.audiobookshelf.app.tts.TtsSentence
 import com.audiobookshelf.app.tts.TtsService
@@ -32,6 +34,9 @@ class AbsTts : Plugin() {
       notifyListeners("needMore", JSObject().put("streamId", streamId).put("lastSeq", lastSeq))
     }
     override fun onEnded() { notifyListeners("ended", JSObject()) }
+    override fun onSleepTimer(remainingMs: Long, running: Boolean, atChapterEnd: Boolean) {
+      notifyListeners("sleepTimer", JSObject().put("remainingMs", remainingMs).put("running", running).put("atChapterEnd", atChapterEnd))
+    }
     override fun onError(code: String, message: String) {
       notifyListeners("error", JSObject().put("code", code).put("message", message))
     }
@@ -46,6 +51,12 @@ class AbsTts : Plugin() {
   @PluginMethod
   fun start(call: PluginCall) {
     TtsService.eventListener = listener
+    // Only one thing owns media playback: pause the audiobook player
+    try {
+      if (PlayerNotificationService.isStarted) (activity as? MainActivity)?.foregroundService?.pause()
+    } catch (e: Exception) {
+      android.util.Log.w("AbsTts", "Failed to pause audiobook player: $e")
+    }
     pendingStreamId = call.getInt("streamId", 0) ?: 0
     val intent = Intent(context, TtsService::class.java).apply {
       action = TtsService.ACTION_START
@@ -90,7 +101,20 @@ class AbsTts : Plugin() {
       val o = arr.getJSONObject(i)
       list.add(TtsSentence(o.getInt("id"), o.getString("text"), o.getString("cfi"), o.optInt("spine"), o.optInt("paragraph")))
     }
-    s.controller.appendChunk(call.getInt("streamId", 0) ?: 0, call.getInt("seq", 0) ?: 0, list, call.getBoolean("done", false) ?: false)
+    s.controller.appendChunk(call.getInt("streamId", 0) ?: 0, call.getInt("seq", 0) ?: 0, list, call.getBoolean("done", false) ?: false, if (call.hasOption("startId")) call.getInt("startId") else null)
+    call.resolve()
+  }
+
+  @PluginMethod
+  fun prependChunk(call: PluginCall) {
+    val s = svc ?: return call.reject("No TTS session")
+    val arr = call.getArray("sentences") ?: JSArray()
+    val list = ArrayList<TtsSentence>(arr.length())
+    for (i in 0 until arr.length()) {
+      val o = arr.getJSONObject(i)
+      list.add(TtsSentence(o.getInt("id"), o.getString("text"), o.getString("cfi"), o.optInt("spine"), o.optInt("paragraph")))
+    }
+    s.controller.prependChunk(call.getInt("streamId", 0) ?: 0, list)
     call.resolve()
   }
 
@@ -107,7 +131,7 @@ class AbsTts : Plugin() {
 
   @PluginMethod
   fun stop(call: PluginCall) {
-    svc?.stopSelf()
+    TtsService.requestStop()
     call.resolve()
   }
 
@@ -144,6 +168,25 @@ class AbsTts : Plugin() {
   @PluginMethod
   fun setVoice(call: PluginCall) {
     svc?.controller?.updateVoice(newVoiceId = call.getString("voiceId", "") ?: "")
+    call.resolve()
+  }
+
+  @PluginMethod
+  fun setSleepTimer(call: PluginCall) {
+    val s = svc ?: return call.reject("No TTS session")
+    if (call.getBoolean("endOfChapter", false) == true) s.setSleepAtChapterEnd() else s.setSleepTimer(call.data.optLong("ms", 0L))
+    call.resolve()
+  }
+
+  @PluginMethod
+  fun adjustSleepTimer(call: PluginCall) {
+    svc?.adjustSleepTimer(call.data.optLong("ms", 0L))
+    call.resolve()
+  }
+
+  @PluginMethod
+  fun cancelSleepTimer(call: PluginCall) {
+    svc?.cancelSleepTimer()
     call.resolve()
   }
 

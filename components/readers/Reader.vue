@@ -337,7 +337,8 @@ export default {
       return `/api/items/${this.selectedLibraryItem.id}/ebook`
     },
     isPlayerOpen() {
-      return this.$store.getters['getIsPlayerOpen']
+      // Audiobook player or EPUB read-aloud player is showing at the bottom
+      return this.$store.getters['getIsPlayerOpen'] || this.$store.state.tts.active
     },
     keepProgress() {
       return this.$store.state.ereaderKeepProgress
@@ -442,7 +443,15 @@ export default {
       if (this.showingToolbar) this.hideToolbar()
       else this.showToolbar()
     },
+    /** Touches on the bottom player or a modal are not taps on the page: they must not show or hide the toolbar */
+    isTouchOutsidePage(e) {
+      return !!e.target?.closest?.('#streamContainer, .modal')
+    },
     touchstart(e) {
+      if (this.isTouchOutsidePage(e)) {
+        this.touchIdentifier = null
+        return
+      }
       // Ignore rapid touch
       if (this.touchstartTime && Date.now() - this.touchstartTime < 250) {
         return

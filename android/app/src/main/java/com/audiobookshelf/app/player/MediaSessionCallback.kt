@@ -35,6 +35,9 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
 
   override fun onPlay() {
     Log.d(tag, "ON PLAY MEDIA SESSION COMPAT")
+    // Read-aloud (TTS) owns playback while its service is alive
+    val tts = com.audiobookshelf.app.tts.TtsService.instance
+    if (tts != null) return tts.startPlayback()
     playerNotificationService.play()
   }
 
@@ -61,6 +64,8 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
 
   override fun onPause() {
     Log.d(tag, "ON PAUSE MEDIA SESSION COMPAT")
+    val tts = com.audiobookshelf.app.tts.TtsService.instance
+    if (tts != null) return tts.controller.pause()
     playerNotificationService.pause()
   }
 
@@ -158,6 +163,13 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
       }
 
       Log.d(tag, "handleCallMediaButton keyEvent = $keyEvent | action ${keyEvent?.action}")
+
+      // While read-aloud (TTS) owns playback it handles the media buttons
+      val tts = com.audiobookshelf.app.tts.TtsService.instance
+      if (tts != null) {
+        if (keyEvent?.action == KeyEvent.ACTION_DOWN) tts.handleMediaKey(keyEvent.keyCode)
+        return true
+      }
 
       // Widget button intent is only sending the action down event
       if (keyEvent?.action == KeyEvent.ACTION_DOWN) {

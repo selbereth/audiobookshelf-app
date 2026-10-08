@@ -1,7 +1,7 @@
 <template>
   <div class="w-full layout-wrapper bg-bg">
     <app-appbar />
-    <div id="content" class="overflow-hidden relative" :class="isPlayerOpen ? 'playerOpen' : ''">
+    <div id="content" class="overflow-hidden relative" :class="isPlayerOpen || isTtsActive ? 'playerOpen' : ''">
       <Nuxt :key="currentLang" />
     </div>
     <app-audio-player-container ref="streamContainer" />
@@ -15,6 +15,7 @@
 </template>
 
 <script>
+import ttsSession from '@/utils/tts/ttsSession'
 import { CapacitorHttp } from '@capacitor/core'
 import { AbsLogger } from '@/plugins/capacitor'
 
@@ -30,6 +31,10 @@ export default {
     }
   },
   watch: {
+    signedInUser(val) {
+      // Logging out (or switching user) ends read aloud: the book and its progress belong to the previous user
+      if (!val && this.$store.state.tts.active) ttsSession.stop()
+    },
     networkConnected: {
       handler(newVal, oldVal) {
         if (!this.hasMounted) {
@@ -81,6 +86,13 @@ export default {
     }
   },
   computed: {
+    isTtsActive() {
+      return this.$store.state.tts.active
+    },
+    /** Signed in user, for ending read aloud on logout */
+    signedInUser() {
+      return this.$store.state.user.user
+    },
     isPlayerOpen() {
       return this.$store.getters['getIsPlayerOpen']
     },
@@ -349,6 +361,9 @@ export default {
     }
   },
   async mounted() {
+    ttsSession.init(this.$store, this.$toast, this)
+    // Read-aloud that was in use when the app was closed is shown again, paused, where it was
+    ttsSession.restore()
     this.$eventBus.$on('change-lang', this.changeLanguage)
     document.addEventListener('visibilitychange', this.visibilityChanged)
 

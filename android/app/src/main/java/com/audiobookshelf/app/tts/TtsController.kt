@@ -1,6 +1,9 @@
 package com.audiobookshelf.app.tts
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
+import android.os.Handler
+import android.os.Looper
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
@@ -21,6 +24,8 @@ class TtsController(private val context: Context) {
     fun onNeedMore(streamId: Int, lastSeq: Int)
     fun onEnded()
     fun onError(code: String, message: String)
+    /** [remainingMs] 0 with running false = timer ended or cancelled */
+    fun onSleepTimer(remainingMs: Long, running: Boolean, atChapterEnd: Boolean) {}
   }
 
   private val tag = "TtsController"
@@ -35,22 +40,70 @@ class TtsController(private val context: Context) {
   var pitch = 1.0f
   var lang: String? = null
   var voiceId: String? = null
+  /** Pause when the spoken sentence would leave this spine item (sleep timer: end of chapter) */
+  @Volatile var sleepSpine: Int? = null
 
   private val store = ArrayList<TtsSentence>()
   private var cursor = 0          // index of the sentence currently speaking (or next to speak)
   private var nextToQueue = 0     // index of next sentence to hand to the engine
   private val queued = LinkedHashSet<Int>() // sentence ids in the engine queue
-  var playing = false
+  @Volatile var playing = false
     private set
   private var wantPlaying = false
   private var engine: TextToSpeech? = null
-  private var engineReady = false
+  @Volatile private var engineReady = false
   private var needMoreSentFor = -1
+  private var lastErrorAt = 0L
+  private var languageWarned = false
 
   val currentSentence: TtsSentence? get() = synchronized(lock) { store.getOrNull(cursor) }
   val bufferedCount: Int get() = synchronized(lock) { store.size - cursor }
 
+  // Debug builds on an emulator have no working speech engine (Google TTS crashes there), so the
+  // engine is replaced by a timer that "speaks" each sentence. Everything else runs for real.
+  private val useFakeEngine = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0 &&
+    (android.os.Build.FINGERPRINT.contains("generic") || android.os.Build.FINGERPRINT.contains("emulator") || android.os.Build.HARDWARE.contains("ranchu"))
+  private val fakeHandler = Handler(Looper.getMainLooper())
+  private val fakeQueue = ArrayDeque<TtsSentence>() // main thread only
+  private var fakeSpeaking = false
+
+  private fun fakeSpeak(s: TtsSentence) {
+    fakeHandler.post {
+      fakeQueue.addLast(s)
+      if (!fakeSpeaking) fakeNext()
+    }
+  }
+
+  private fun fakeNext() {
+    val s = fakeQueue.removeFirstOrNull()
+    if (s == null) {
+      fakeSpeaking = false
+      return
+    }
+    fakeSpeaking = true
+    progressListener.onStart(s.id.toString())
+    val ms = (s.text.length * 45 / rate).toLong().coerceAtLeast(400)
+    fakeHandler.postDelayed({
+      progressListener.onDone(s.id.toString())
+      fakeNext()
+    }, ms)
+  }
+
+  private fun fakeStop() {
+    fakeHandler.post {
+      fakeHandler.removeCallbacksAndMessages(null)
+      fakeQueue.clear()
+      fakeSpeaking = false
+    }
+  }
+
   fun init() {
+    if (useFakeEngine) {
+      Log.w(tag, "Using fake speech engine (debug build on emulator)")
+      engineReady = true
+      synchronized(lock) { if (wantPlaying) refill() }
+      return
+    }
     if (engine != null) return
     engine = TextToSpeech(context.applicationContext) { status ->
       if (status != TextToSpeech.SUCCESS) {
@@ -76,7 +129,10 @@ class TtsController(private val context: Context) {
       val result = e.setLanguage(Locale.forLanguageTag(lang!!))
       if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
         Log.e(tag, "setLanguage($lang) result=$result")
-        listener?.onError("language_unsupported", "No voice available for language $lang")
+        if (!languageWarned) {
+          languageWarned = true
+          listener?.onError("language_unsupported", "No voice available for language $lang")
+        }
       }
     }
   }
@@ -86,6 +142,8 @@ class TtsController(private val context: Context) {
       val id = utteranceId?.toIntOrNull() ?: return
       var sentence: TtsSentence? = null
       synchronized(lock) {
+        // A callback for something that was flushed (skip, pause, seek) must not move the cursor back
+        if (!queued.contains(id)) return
         val idx = store.indexOfFirst { it.id == id }
         if (idx >= 0) {
           cursor = idx
@@ -99,10 +157,16 @@ class TtsController(private val context: Context) {
       val id = utteranceId?.toIntOrNull() ?: return
       var ended = false
       var needMore = false
+      var sleepNow = false
       synchronized(lock) {
         if (!queued.remove(id)) return // flushed/stale
         val idx = store.indexOfFirst { it.id == id }
         if (idx >= 0) cursor = minOf(idx + 1, store.size)
+        val sleepAt = sleepSpine
+        if (sleepAt != null && cursor < store.size && store[cursor].spine != sleepAt) {
+          sleepSpine = null
+          sleepNow = true
+        }
         if (wantPlaying) refill()
         if (queued.isEmpty() && nextToQueue >= store.size) {
           if (streamDone) {
@@ -116,6 +180,12 @@ class TtsController(private val context: Context) {
           needMore = true
         }
       }
+      if (sleepNow) {
+        // The next chapter starts: the cursor is already on its first sentence so resuming continues there
+        pause("sleep")
+        listener?.onSleepTimer(0, false, false)
+        return
+      }
       if (needMore) listener?.onNeedMore(streamId, lastSeq)
       if (ended) listener?.onEnded()
     }
@@ -123,36 +193,70 @@ class TtsController(private val context: Context) {
     @Deprecated("Deprecated in Java")
     override fun onError(utteranceId: String?) {
       Log.e(tag, "utterance error $utteranceId")
-      listener?.onError("utterance_error", "Failed to speak sentence")
+      // Skip the sentence that failed: left in the queue it would hold its slot forever and stall the book
+      onDone(utteranceId)
+      val now = System.currentTimeMillis()
+      if (now - lastErrorAt > 10000) {
+        lastErrorAt = now
+        listener?.onError("utterance_error", "Failed to speak sentence")
+      }
     }
   }
 
   /** Must be called with lock held */
   private fun refill() {
-    val e = engine ?: return
     if (!engineReady) return
     while (queued.size < window && nextToQueue < store.size) {
       val s = store[nextToQueue++]
       queued.add(s.id)
-      val params = Bundle()
-      e.speak(s.text, TextToSpeech.QUEUE_ADD, params, s.id.toString())
+      if (useFakeEngine) {
+        fakeSpeak(s)
+      } else {
+        engine?.speak(s.text, TextToSpeech.QUEUE_ADD, Bundle(), s.id.toString())
+      }
     }
   }
 
   /** Must be called with lock held */
   private fun flushEngine() {
     engine?.stop()
+    if (useFakeEngine) fakeStop()
     queued.clear()
     nextToQueue = cursor
   }
 
-  fun appendChunk(sid: Int, seq: Int, sentences: List<TtsSentence>, done: Boolean) {
+  /** [startId] positions the cursor on that sentence (sentences before it are history for rewinding) */
+  fun appendChunk(sid: Int, seq: Int, sentences: List<TtsSentence>, done: Boolean, startId: Int? = null) {
+    var positioned: TtsSentence? = null
     synchronized(lock) {
       if (sid != streamId || seq <= lastSeq) return
       lastSeq = seq
       store.addAll(sentences)
       if (done) streamDone = true
+      if (startId != null) {
+        val idx = store.indexOfFirst { it.id == startId }
+        if (idx >= 0) {
+          cursor = idx
+          flushEngine()
+          // Nothing will start speaking while paused, so tell the UI where we are now
+          if (!wantPlaying) positioned = store[idx]
+        }
+      }
       if (wantPlaying) refill()
+    }
+    positioned?.let { listener?.onSentence(it) }
+  }
+
+  /**
+   * Text from before what was sent first, so the listener can rewind to the start of the book.
+   * Goes in front of everything already here: the cursor and the engine queue shift along with it.
+   */
+  fun prependChunk(sid: Int, sentences: List<TtsSentence>) {
+    synchronized(lock) {
+      if (sid != streamId || sentences.isEmpty()) return
+      store.addAll(0, sentences)
+      cursor += sentences.size
+      nextToQueue += sentences.size
     }
   }
 
@@ -235,6 +339,11 @@ class TtsController(private val context: Context) {
       lastSeq = -1
       streamDone = false
       needMoreSentFor = -1
+      if (sleepSpine != null) {
+        // The chapter it was set for may no longer be the one being read
+        sleepSpine = null
+        listener?.onSleepTimer(0, false, false)
+      }
     }
   }
 
@@ -267,6 +376,7 @@ class TtsController(private val context: Context) {
     }
     engine?.stop()
     engine?.shutdown()
+    fakeHandler.removeCallbacksAndMessages(null)
     engine = null
     engineReady = false
   }

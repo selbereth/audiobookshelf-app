@@ -1,6 +1,6 @@
 <template>
-  <!-- Main container - only shows when playback session exists, applies fullscreen/platform classes -->
-  <div v-if="playbackSession" id="streamContainer" class="fixed top-0 left-0 layout-wrapper right-0 z-50 pointer-events-none" :class="{ fullscreen: showFullscreen, 'ios-player': $platform === 'ios', 'web-player': $platform === 'web' }">
+  <!-- Main container - shows when an audiobook playback session exists or EPUB read-aloud (TTS) is active, applies fullscreen/platform classes -->
+  <div v-if="playbackSession || isTts" id="streamContainer" class="fixed top-0 left-0 layout-wrapper right-0 z-50 pointer-events-none" :class="{ fullscreen: showFullscreen, 'ios-player': $platform === 'ios', 'web-player': $platform === 'web' }">
     <!-- Fullscreen overlays: colored background and menu overlays -->
     <div v-if="showFullscreen" class="w-full h-full z-10 absolute top-0 left-0 pointer-events-auto" :style="{ backgroundColor: coverRgb }">
       <!-- Background gradient for player -->
@@ -12,7 +12,7 @@
       </div>
 
       <!-- Cast button - Chromecast toggle -->
-      <div v-show="showCastBtn" class="top-6 right-16 absolute cursor-pointer">
+      <div v-show="showCastBtn && !isTts" class="top-6 right-16 absolute cursor-pointer">
         <span class="material-symbols text-3xl" :class="coverBgIsLight && theme !== 'black' ? 'text-black' : ''" @click="castClick">{{ isCasting ? 'cast_connected' : 'cast' }}</span>
       </div>
 
@@ -22,11 +22,11 @@
       </div>
 
       <!-- Playback method indicator (Direct/Local/Transcode) -->
-      <p class="top-4 absolute left-0 right-0 mx-auto text-center uppercase tracking-widest text-opacity-75 z-50" :class="{ 'text-black text-opacity-75': coverBgIsLight && theme !== 'black' }" style="font-size: 10px">{{ isDirectPlayMethod ? $strings.LabelPlaybackDirect : isLocalPlayMethod ? $strings.LabelPlaybackLocal : $strings.LabelPlaybackTranscode }}</p>
+      <p class="top-4 absolute left-0 right-0 mx-auto text-center uppercase tracking-widest text-opacity-75 z-50" :class="{ 'text-black text-opacity-75': coverBgIsLight && theme !== 'black' }" style="font-size: 10px">{{ isTts ? 'Read aloud' : isDirectPlayMethod ? $strings.LabelPlaybackDirect : isLocalPlayMethod ? $strings.LabelPlaybackLocal : $strings.LabelPlaybackTranscode }}</p>
     </div>
 
     <!-- Overall book progress bar -->
-    <div v-if="playerSettings.useChapterTrack && playerSettings.useTotalTrack && showFullscreen" class="absolute total-track w-full z-30 px-6">
+    <div v-if="!isTts && playerSettings.useChapterTrack && playerSettings.useTotalTrack && showFullscreen" class="absolute total-track w-full z-30 px-6">
       <div class="flex">
         <p class="font-mono text-fg" style="font-size: 0.8rem">{{ currentTimePretty }}</p>
         <div class="flex-grow" />
@@ -37,6 +37,20 @@
           <div ref="totalReadyTrack" class="h-full bg-track-buffered absolute top-0 left-0 pointer-events-none rounded-full" />
           <div ref="totalBufferedTrack" class="h-full bg-track absolute top-0 left-0 pointer-events-none rounded-full" />
           <div ref="totalPlayedTrack" class="h-full bg-track-cursor absolute top-0 left-0 pointer-events-none rounded-full" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Read aloud: whole book progress above the chapter track -->
+    <div v-if="isTts && ttsChapterMode && playerSettings.useTotalTrack && showFullscreen" class="absolute total-track w-full z-30 px-6">
+      <div class="flex">
+        <p class="font-mono text-fg" style="font-size: 0.8rem">{{ Math.round(tts.progress) }}%</p>
+        <div class="flex-grow" />
+        <p class="font-mono text-fg text-opacity-75" style="font-size: 0.8rem">{{ $strings.LabelTotalTrack }}</p>
+      </div>
+      <div class="w-full">
+        <div class="h-1 w-full bg-track/50 relative rounded-full overflow-hidden">
+          <div class="h-full bg-track-cursor absolute top-0 left-0 rounded-full pointer-events-none" :style="{ width: tts.progress + '%' }" />
         </div>
       </div>
     </div>
@@ -56,7 +70,8 @@
     <!-- Title and author text -->
     <div class="title-author-texts absolute z-30 left-0 right-0 overflow-hidden" @click="clickTitleAndAuthor">
       <div ref="titlewrapper" class="overflow-hidden relative">
-        <p class="title-text whitespace-nowrap"></p>
+        <p v-if="isTts" class="title-text whitespace-nowrap truncate">{{ title }}</p>
+        <p v-else class="title-text whitespace-nowrap"></p>
       </div>
       <p class="author-text text-fg text-opacity-75 truncate">{{ authorName }}</p>
     </div>
@@ -65,11 +80,11 @@
       <!-- Top controls bar - fullscreen only: bookmarks, speed, sleep timer, chapters -->
       <div v-if="showFullscreen" class="absolute bottom-4 left-0 right-0 w-full pb-4 pt-2 mx-auto px-6" style="max-width: 414px">
         <div class="flex items-center justify-between pointer-events-auto">
-          <span v-if="!isPodcast && serverLibraryItemId && socketConnected" class="material-symbols text-3xl text-fg-muted cursor-pointer" :class="{ fill: bookmarks.length }" @click="$emit('showBookmarks')">bookmark</span>
+          <span v-if="!isTts && !isPodcast && serverLibraryItemId && socketConnected" class="material-symbols text-3xl text-fg-muted cursor-pointer" :class="{ fill: bookmarks.length }" @click="$emit('showBookmarks')">bookmark</span>
           <!-- hidden for podcasts but still using this as a placeholder -->
           <span v-else class="material-symbols text-3xl text-white text-opacity-0">bookmark</span>
 
-          <span class="font-mono text-fg-muted cursor-pointer" style="font-size: 1.35rem" @click="$emit('selectPlaybackSpeed')">{{ currentPlaybackRate }}x</span>
+          <span class="font-mono text-fg-muted cursor-pointer" style="font-size: 1.35rem" @click="$emit('selectPlaybackSpeed')">{{ isTts ? tts.rate : currentPlaybackRate }}x</span>
           <svg v-if="!sleepTimerRunning" xmlns="http://www.w3.org/2000/svg" class="h-7 w-7 text-fg-muted cursor-pointer" fill="none" viewBox="0 0 24 24" stroke="currentColor" @click.stop="$emit('showSleepTimer')">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
           </svg>
@@ -88,17 +103,17 @@
           <span v-show="showFullscreen && !playerSettings.lockUi" class="material-symbols next-icon text-fg cursor-pointer" :class="showLoadingState ? 'text-opacity-10' : 'text-opacity-75'" @click.stop="jumpChapterStart">first_page</span>
           <div v-show="!playerSettings.lockUi" class="jump-icon text-fg cursor-pointer flex flex-col items-center" :class="showLoadingState ? 'text-opacity-10' : 'text-opacity-75'" @click.stop="jumpBackwards">
             <span class="material-symbols text-3xl leading-none">replay</span>
-            <span v-if="showFullscreen" class="jump-label text-[10px] font-semibold leading-tight">{{ jumpBackwardsLabel }}</span>
+            <span v-if="showFullscreen && !isTts" class="jump-label text-[10px] font-semibold leading-tight">{{ jumpBackwardsLabel }}</span>
           </div>
           <div class="play-btn cursor-pointer shadow-sm flex items-center justify-center rounded-full text-primary mx-4 relative overflow-hidden" :style="{ backgroundColor: coverRgb }" :class="{ 'animate-spin': seekLoading }" @mousedown.prevent @mouseup.prevent @click.stop="playPauseClick">
             <div v-if="!coverBgIsLight" class="absolute top-0 left-0 w-full h-full bg-white bg-opacity-20 pointer-events-none" />
 
-            <span v-if="!showLoadingState" class="material-symbols fill" :class="{ 'text-white': coverRgb && !coverBgIsLight }">{{ seekLoading ? 'autorenew' : !isPlaying ? 'play_arrow' : 'pause' }}</span>
+            <span v-if="!showLoadingState" class="material-symbols fill" :class="{ 'text-white': coverRgb && !coverBgIsLight }">{{ seekLoading ? 'autorenew' : !playing ? 'play_arrow' : 'pause' }}</span>
             <widgets-spinner-icon v-else class="h-8 w-8" />
           </div>
           <div v-show="!playerSettings.lockUi" class="jump-icon text-fg cursor-pointer flex flex-col items-center" :class="showLoadingState ? 'text-opacity-10' : 'text-opacity-75'" @click.stop="jumpForward">
             <span class="material-symbols text-3xl leading-none">forward_media</span>
-            <span v-if="showFullscreen" class="jump-label text-[10px] font-semibold leading-tight">{{ jumpForwardLabel }}</span>
+            <span v-if="showFullscreen && !isTts" class="jump-label text-[10px] font-semibold leading-tight">{{ jumpForwardLabel }}</span>
           </div>
           <span v-show="showFullscreen && !playerSettings.lockUi" class="material-symbols next-icon text-fg cursor-pointer" :class="nextChapter && !showLoadingState ? 'text-opacity-75' : 'text-opacity-10'" @click.stop="jumpNextChapter">last_page</span>
         </div>
@@ -107,15 +122,23 @@
       <!-- Chapter progress bar -->
       <div id="playerTrack" class="absolute left-0 w-full px-6">
         <div class="flex pointer-events-none">
-          <p class="font-mono text-fg" style="font-size: 0.8rem" ref="currentTimestamp">0:00</p>
-          <div class="flex-grow" />
-          <p class="font-mono text-fg" style="font-size: 0.8rem">{{ timeRemainingPretty }}</p>
+          <template v-if="isTts">
+            <!-- Read aloud has no timeline: book progress on the left, speed on the right -->
+            <p key="tts-progress" class="font-mono text-fg" style="font-size: 0.8rem">{{ Math.round(ttsTrackPercent) }}%</p>
+            <div class="flex-grow" />
+            <p class="font-mono text-fg pointer-events-auto cursor-pointer" style="font-size: 0.8rem" @click.stop="$emit('selectPlaybackSpeed')">{{ tts.rate }}x</p>
+          </template>
+          <template v-else>
+            <p key="audio-timestamp" class="font-mono text-fg" style="font-size: 0.8rem" ref="currentTimestamp">0:00</p>
+            <div class="flex-grow" />
+            <p class="font-mono text-fg" style="font-size: 0.8rem">{{ timeRemainingPretty }}</p>
+          </template>
         </div>
-        <div ref="track" class="h-1.5 w-full bg-track/50 relative rounded-full overflow-hidden" :class="{ 'animate-pulse': showLoadingState }" @click.stop>
-          <div ref="readyTrack" class="h-full bg-track-buffered absolute top-0 left-0 rounded-full pointer-events-none" />
-          <div ref="bufferedTrack" class="h-full bg-track absolute top-0 left-0 rounded-full pointer-events-none" />
-          <div ref="playedTrack" class="h-full bg-track-cursor absolute top-0 left-0 rounded-full pointer-events-none" />
-          <div ref="trackCursor" class="h-7 w-7 rounded-full absolute pointer-events-auto flex items-center justify-center" :style="{ top: '-11px' }" :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen }" @touchstart="touchstartCursor">
+        <div ref="track" class="h-1.5 w-full bg-track/50 relative rounded-full overflow-hidden" :class="{ 'animate-pulse': showLoadingState }" @click.stop="clickTrack">
+          <div v-show="!isTts" ref="readyTrack" class="h-full bg-track-buffered absolute top-0 left-0 rounded-full pointer-events-none" />
+          <div v-show="!isTts" ref="bufferedTrack" class="h-full bg-track absolute top-0 left-0 rounded-full pointer-events-none" />
+          <div ref="playedTrack" class="h-full bg-track-cursor absolute top-0 left-0 rounded-full pointer-events-none" :style="isTts ? { width: ttsTrackPercent + '%' } : null" />
+          <div ref="trackCursor" class="h-7 w-7 rounded-full absolute pointer-events-auto flex items-center justify-center" :style="{ top: '-11px' }" :class="{ 'opacity-0': playerSettings.lockUi || !showFullscreen || isTts }" @touchstart="touchstartCursor">
             <div class="bg-track-cursor rounded-full w-3.5 h-3.5 pointer-events-none" />
           </div>
         </div>
@@ -136,6 +159,7 @@ import { Dialog } from '@capacitor/dialog'
 import { getAverageColorFromCoverUrl } from '@/utils/coverAverageColor'
 import WrappingMarquee from '@/assets/WrappingMarquee.js'
 import jumpLabelMixin from '@/mixins/jumpLabel'
+import ttsSession from '@/utils/tts/ttsSession'
 
 export default {
   props: {
@@ -150,6 +174,7 @@ export default {
   mixins: [jumpLabelMixin],
   data() {
     return {
+      ttsSession,
       windowHeight: 0,
       windowWidth: 0,
       playbackSession: null,
@@ -198,15 +223,65 @@ export default {
     bookCoverAspectRatio() {
       this.updateScreenSize()
     },
+    isTts(val) {
+      // The content changes completely: show the collapsed player
+      this.showFullscreen = false
+      // The audiobook player comes back when read-aloud ends: redraw its track
+      if (!val && this.playbackSession) {
+        this.$nextTick(() => {
+          this.measureAndUpdateTrackWidth()
+          this.updateTrack()
+          this.updateTimestamp()
+        })
+      }
+    },
     title(val) {
-      if (this.titleMarquee) this.titleMarquee.init(val)
+      if (this.titleMarquee && !this.isTts) this.titleMarquee.init(val)
     }
   },
   computed: {
+    /**
+     * EPUB read-aloud is using this player. It takes over from an audiobook session (which native pauses
+     * when read-aloud starts), and the audiobook comes back when read-aloud stops.
+     */
+    isTts() {
+      return this.$store.state.tts.active
+    },
+    ttsChapter() {
+      return this.$store.getters['tts/currentChapter']
+    },
+    /** The chapter track needs to know where the chapter starts and ends in the book */
+    ttsChapterMode() {
+      return this.isTts && this.playerSettings.useChapterTrack && this.tts.chapterEnd > this.tts.chapterStart
+    },
+    /** What the main track shows: progress in the chapter or in the whole book */
+    ttsTrackPercent() {
+      if (!this.ttsChapterMode) return this.tts.progress
+      const { chapterStart, chapterEnd, progress } = this.tts
+      return Math.min(100, Math.max(0, ((progress - chapterStart) / (chapterEnd - chapterStart)) * 100))
+    },
+    tts() {
+      return this.$store.state.tts
+    },
+    playing() {
+      return this.isTts ? this.tts.playing : this.isPlaying
+    },
     theme() {
       return document.documentElement.dataset.theme || 'dark'
     },
     menuItems() {
+      if (this.isTts) {
+        return [
+          { text: this.$strings.LabelTotalTrack, value: 'total_track', icon: this.playerSettings.useTotalTrack ? 'check_box' : 'check_box_outline_blank' },
+          { text: this.$strings.LabelChapterTrack, value: 'chapter_track', icon: this.playerSettings.useChapterTrack ? 'check_box' : 'check_box_outline_blank' },
+          {
+            text: this.playerSettings.lockUi ? this.$strings.LabelUnlockPlayer : this.$strings.LabelLockPlayer,
+            value: 'lock',
+            icon: this.playerSettings.lockUi ? 'lock' : 'lock_open'
+          },
+          { text: this.$strings.LabelClosePlayer, value: 'close', icon: 'close' }
+        ]
+      }
       const items = []
       // TODO: Implement on iOS
       if (this.$platform !== 'ios' && !this.isPodcast && this.mediaId) {
@@ -312,9 +387,12 @@ export default {
       return this.playbackSession?.mediaMetadata || null
     },
     libraryItem() {
+      // A downloaded read-aloud item shows its local cover
+      if (this.isTts) return this.tts.localLibraryItem?.coverContentUrl ? null : this.tts.libraryItem
       return this.playbackSession?.libraryItem || null
     },
     localLibraryItem() {
+      if (this.isTts) return this.tts.localLibraryItem
       return this.playbackSession?.localLibraryItem || null
     },
     localLibraryItemCoverSrc() {
@@ -332,7 +410,11 @@ export default {
       return this.playMethod == this.$constants.PlayMethod.DIRECTPLAY
     },
     title() {
-      const mediaItemTitle = this.playbackSession?.displayTitle || this.mediaMetadata?.title || 'Title'
+      const mediaItemTitle = this.isTts ? this.tts.title : this.playbackSession?.displayTitle || this.mediaMetadata?.title || 'Title'
+      if (this.isTts) {
+        if (!this.ttsChapter) return mediaItemTitle
+        return this.showFullscreen ? this.ttsChapter.title : `${mediaItemTitle} | ${this.ttsChapter.title}`
+      }
       if (this.currentChapterTitle) {
         if (this.showFullscreen) return this.currentChapterTitle
         return `${mediaItemTitle} | ${this.currentChapterTitle}`
@@ -340,17 +422,21 @@ export default {
       return mediaItemTitle
     },
     authorName() {
+      if (this.isTts) return this.tts.author
       if (this.playbackSession) return this.playbackSession.displayAuthor
       return this.mediaMetadata?.authorName || 'Author'
     },
     chapters() {
+      if (this.isTts) return this.tts.chapters
       return this.playbackSession?.chapters || []
     },
     currentChapter() {
+      if (this.isTts) return this.ttsChapter
       if (!this.chapters.length) return null
       return this.chapters.find((ch) => Number(Number(ch.start).toFixed(2)) <= this.currentTime && Number(Number(ch.end).toFixed(2)) > this.currentTime)
     },
     nextChapter() {
+      if (this.isTts) return this.$store.getters['tts/nextChapter']
       if (!this.chapters.length) return
       return this.chapters.find((c) => Number(Number(c.start).toFixed(2)) > this.currentTime)
     },
@@ -450,7 +536,8 @@ export default {
     },
     async selectChapter(chapter) {
       await this.$hapticsImpact()
-      this.seek(chapter.start)
+      if (this.isTts) ttsSession.jumpToChapter(chapter)
+      else this.seek(chapter.start)
       this.showChapterModal = false
     },
     async castClick() {
@@ -480,12 +567,14 @@ export default {
     },
     async jumpNextChapter() {
       await this.$hapticsImpact()
+      if (this.isTts) return ttsSession.skipChapter(1)
       if (this.showLoadingState) return
       if (!this.nextChapter) return
       this.seek(this.nextChapter.start)
     },
     async jumpChapterStart() {
       await this.$hapticsImpact()
+      if (this.isTts) return ttsSession.skipChapter(-1)
       if (this.showLoadingState) return
       if (!this.currentChapter) {
         return this.restart()
@@ -506,6 +595,7 @@ export default {
       this.$emit('showSleepTimer')
     },
     async setPlaybackSpeed(speed) {
+      if (this.isTts) return ttsSession.setRate(speed)
       console.log(`[AudioPlayer] Set Playback Rate: ${speed}`)
       this.currentPlaybackRate = speed
       this.updateTimestamp()
@@ -516,11 +606,13 @@ export default {
     },
     async jumpBackwards() {
       await this.$hapticsImpact()
+      if (this.isTts) return ttsSession.skip(-1)
       if (this.showLoadingState) return
       AbsAudioPlayer.seekBackward({ value: this.jumpBackwardsTime })
     },
     async jumpForward() {
       await this.$hapticsImpact()
+      if (this.isTts) return ttsSession.skip(1)
       if (this.showLoadingState) return
       AbsAudioPlayer.seekForward({ value: this.jumpForwardTime })
     },
@@ -549,6 +641,7 @@ export default {
       this.updateReadyTrack()
     },
     updateReadyTrack() {
+      if (this.isTts) return
       if (!this.$refs.readyTrack) return
 
       if (this.playerSettings.useChapterTrack) {
@@ -563,6 +656,7 @@ export default {
       }
     },
     updateTimestamp() {
+      if (this.isTts) return // the track shows read-aloud progress
       const ts = this.$refs.currentTimestamp
       if (!ts) {
         console.error('No timestamp el')
@@ -598,6 +692,7 @@ export default {
       this.updateTrack()
     },
     updateTrack() {
+      if (this.isTts) return // the track shows read-aloud progress
       // Update progress track UI
       let currentTimeToUse = this.isDraggingCursor ? this.draggingCurrentTime : this.currentTime
       let percentDone = currentTimeToUse / this.totalDuration
@@ -652,6 +747,7 @@ export default {
       }
     },
     async touchstartCursor(e) {
+      if (this.isTts) return // read aloud seeks by tapping the track
       if (!e || !e.touches || !this.$refs.track || !this.showFullscreen || this.playerSettings.lockUi) return
 
       await this.$hapticsImpact()
@@ -661,8 +757,17 @@ export default {
       this.draggingCurrentTime = this.currentTime
       this.updateTrack()
     },
+    /** Read aloud: tap the track to jump to that point in the book */
+    clickTrack(e) {
+      if (!this.isTts || !this.showFullscreen || this.playerSettings.lockUi) return
+      const rect = this.$refs.track.getBoundingClientRect()
+      const percent = ((e.clientX - rect.left) / rect.width) * 100
+      if (this.ttsChapterMode) ttsSession.seekToPercentInChapter(percent)
+      else ttsSession.seekToPercent(percent)
+    },
     async playPauseClick() {
       await this.$hapticsImpact()
+      if (this.isTts) return ttsSession.playPause()
       if (this.showLoadingState) return
 
       this.isPlaying = !!((await AbsAudioPlayer.playPause()) || {}).playing
@@ -795,6 +900,11 @@ export default {
           this.updateUseChapterTrack()
           this.savePlayerSettings()
         } else if (action === 'close') {
+          if (this.isTts) {
+            this.showFullscreen = false
+            ttsSession.stop()
+            return
+          }
           this.closePlayback()
         }
       })
@@ -886,6 +996,8 @@ export default {
       this.isLoading = true
       this.syncStatus = 0
       this.$store.commit('setPlaybackSession', this.playbackSession)
+      // An audiobook is starting: read aloud (running, or only restored after the app was reopened) steps aside
+      if (this.$store.state.tts.active) ttsSession.stop()
 
       // Set track width
       this.$nextTick(() => {
