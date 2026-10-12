@@ -22,7 +22,7 @@
       </div>
 
       <!-- Playback method indicator (Direct/Local/Transcode) -->
-      <p class="top-4 absolute left-0 right-0 mx-auto text-center uppercase tracking-widest text-opacity-75 z-50" :class="{ 'text-black text-opacity-75': coverBgIsLight && theme !== 'black' }" style="font-size: 10px">{{ isTts ? 'Read aloud' : isDirectPlayMethod ? $strings.LabelPlaybackDirect : isLocalPlayMethod ? $strings.LabelPlaybackLocal : $strings.LabelPlaybackTranscode }}</p>
+      <p class="top-4 absolute left-0 right-0 mx-auto text-center uppercase tracking-widest text-opacity-75 z-50" :class="{ 'text-black text-opacity-75': coverBgIsLight && theme !== 'black' }" style="font-size: 10px">{{ isTts ? $strings.LabelReadAloud : isDirectPlayMethod ? $strings.LabelPlaybackDirect : isLocalPlayMethod ? $strings.LabelPlaybackLocal : $strings.LabelPlaybackTranscode }}</p>
     </div>
 
     <!-- Overall book progress bar -->
@@ -58,7 +58,8 @@
     <!-- Book cover wrapper  -->
     <div class="cover-wrapper absolute z-30 pointer-events-auto" @click="clickContainer">
       <div class="w-full h-full flex justify-center">
-        <covers-book-cover v-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="bookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
+        <app-read-aloud-text v-if="showTtsText" />
+        <covers-book-cover v-else-if="libraryItem || localLibraryItemCoverSrc" ref="cover" :library-item="libraryItem" :download-cover="localLibraryItemCoverSrc" :width="bookCoverWidth" :book-cover-aspect-ratio="bookCoverAspectRatio" raw @imageLoaded="coverImageLoaded" />
       </div>
 
       <!-- Sync failed indicator - shows error icon if progress sync failed -->
@@ -89,7 +90,9 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
           </svg>
           <div v-else class="h-7 w-7 flex items-center justify-around cursor-pointer" @click.stop="$emit('showSleepTimer')">
-            <p class="text-xl font-mono text-success">{{ sleepTimeRemainingPretty }}</p>
+            <!-- Read aloud's end-of-chapter timer has no time left to show -->
+            <span v-if="isTts && tts.sleepAtChapterEnd" class="material-symbols text-2xl text-success">bedtime</span>
+            <p v-else class="text-xl font-mono text-success">{{ sleepTimeRemainingPretty }}</p>
           </div>
 
           <span class="material-symbols text-3xl text-fg cursor-pointer" :class="chapters.length ? 'text-opacity-75' : 'text-opacity-10'" @click="clickChaptersBtn">format_list_bulleted</span>
@@ -215,6 +218,10 @@ export default {
     }
   },
   watch: {
+    showTtsText() {
+      // The area the cover used to fill is a different size for the text
+      this.updateScreenSize()
+    },
     showFullscreen(val) {
       this.updateScreenSize()
       this.$store.commit('setPlayerFullscreen', !!val)
@@ -249,6 +256,10 @@ export default {
     },
     ttsChapter() {
       return this.$store.getters['tts/currentChapter']
+    },
+    /** The fullscreen read aloud player shows the text being read where an audiobook shows its cover */
+    showTtsText() {
+      return this.isTts && this.showFullscreen && !this.tts.restored
     },
     /** The chapter track needs to know where the chapter starts and ends in the book */
     ttsChapterMode() {
@@ -962,6 +973,8 @@ export default {
       console.log('onPlayingUpdate', JSON.stringify(data))
       this.isPlaying = !!data.value
       this.$store.commit('setPlayerPlaying', this.isPlaying)
+      // The audiobook started playing: read aloud steps aside (a running one is stopped natively too, a restored one is only forgotten here)
+      if (this.isPlaying && this.$store.state.tts.active) ttsSession.stop()
       if (this.isPlaying) {
         this.startPlayInterval()
       } else {
@@ -996,8 +1009,8 @@ export default {
       this.isLoading = true
       this.syncStatus = 0
       this.$store.commit('setPlaybackSession', this.playbackSession)
-      // An audiobook is starting: read aloud (running, or only restored after the app was reopened) steps aside
-      if (this.$store.state.tts.active) ttsSession.stop()
+      // (Read aloud steps aside when the audiobook starts playing, see onPlayingUpdate: this session may only be the
+      // last one being restored paused when the app opens, which must not end a read aloud session)
 
       // Set track width
       this.$nextTick(() => {
@@ -1079,12 +1092,18 @@ export default {
 
       this.windowHeight = window.innerHeight
       this.windowWidth = window.innerWidth
-      const coverHeight = this.fullscreenBookCoverWidth * this.bookCoverAspectRatio
+      let coverWidth = this.fullscreenBookCoverWidth
+      let coverHeight = coverWidth * this.bookCoverAspectRatio
+      if (this.showTtsText && this.windowWidth < this.windowHeight) {
+        // The text uses all the room above the controls, not the shape of a cover
+        coverWidth = this.windowWidth - 32
+        coverHeight = this.windowHeight - 400
+      }
       const coverImageWidthCollapsed = 46 / this.bookCoverAspectRatio
       const titleAuthorLeftOffsetCollapsed = 30 + coverImageWidthCollapsed
       const titleAuthorWidthCollapsed = this.windowWidth - 128 - titleAuthorLeftOffsetCollapsed - 10
 
-      document.documentElement.style.setProperty('--cover-image-width', this.fullscreenBookCoverWidth + 'px')
+      document.documentElement.style.setProperty('--cover-image-width', coverWidth + 'px')
       document.documentElement.style.setProperty('--cover-image-height', coverHeight + 'px')
       document.documentElement.style.setProperty('--cover-image-width-collapsed', coverImageWidthCollapsed + 'px')
       document.documentElement.style.setProperty('--cover-image-height-collapsed', 46 + 'px')

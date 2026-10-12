@@ -4,12 +4,16 @@ import ePub from 'epubjs'
  * Walks an epub.js book and yields speakable sentences with a CFI for each.
  */
 
-const BLOCK_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, li, blockquote, dd, dt, figcaption, td, th, div'
-const BLOCK_CHILD_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, li, blockquote, dd, dt, figcaption, table, ul, ol, div'
-const SKIP_TAGS = new Set(['script', 'style', 'rt', 'rp', 'noscript', 'head'])
+/** Elements that start and end a run of text: the text before and after one is never part of the same sentence */
+const BLOCK_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'ul', 'ol', 'dl', 'dd', 'dt', 'blockquote', 'figure', 'figcaption', 'td', 'th', 'tr', 'table', 'div', 'section', 'article', 'aside', 'header', 'footer', 'main', 'nav', 'pre', 'details', 'summary', 'body', 'hr'])
+const SKIP_TAGS = new Set(['script', 'style', 'rt', 'rp', 'noscript', 'head', 'svg', 'math'])
+const FOOTNOTE_TYPES = ['noteref', 'footnote', 'endnote', 'rearnote', 'note']
+const FOOTNOTE_ROLES = ['doc-noteref', 'doc-footnote', 'doc-endnote']
 const MAX_SENTENCE_LENGTH = 1000
 // Sentences before the start location that are kept so the listener can rewind
 const HISTORY_SENTENCES = 60
+// A book has to fit in memory twice (here and in the native queue): stop at an absurd size
+const MAX_SENTENCES = 250000
 
 function epubTypes(el) {
   return (el.getAttribute?.('epub:type') || el.getAttributeNS?.('http://www.idpf.org/2007/ops', 'type') || '').toLowerCase().split(/\s+/)
@@ -22,48 +26,60 @@ function isSkippedElement(el, options) {
   const style = el.getAttribute?.('style') || ''
   if (/display\s*:\s*none/i.test(style)) return true
   const types = epubTypes(el)
-  if (types.includes('pagebreak')) return true
-  if (!options.readFootnotes && (types.includes('noteref') || types.includes('footnote') || types.includes('endnote') || types.includes('rearnote') || tag === 'aside')) return true
-  return false
-}
-
-/** True if node or an ancestor (up to root) should not be spoken */
-function isInSkippedSubtree(node, root, options) {
-  for (let el = node.nodeType === 1 ? node : node.parentElement; el && el !== root; el = el.parentElement) {
-    if (isSkippedElement(el, options)) return true
+  if (types.includes('pagebreak') || el.getAttribute?.('role') === 'doc-pagebreak') return true
+  if (!options.readFootnotes) {
+    // An aside is only skipped when it is a footnote: asides can also be sidebars and pull quotes that belong to the text
+    if (FOOTNOTE_TYPES.some((t) => types.includes(t))) return true
+    if (FOOTNOTE_ROLES.includes(el.getAttribute?.('role'))) return true
   }
   return false
 }
 
-/** Text-bearing blocks: block tags that do not contain other block elements */
-function* leafBlocks(body, options) {
-  for (const el of body.querySelectorAll(BLOCK_SELECTOR)) {
-    if (el.querySelector(BLOCK_CHILD_SELECTOR)) continue
-    if (isInSkippedSubtree(el, body.parentElement, options)) continue
-    yield el
-  }
-}
-
-/** Collect text nodes in a block with their offsets in the block's collapsed text */
-function collectText(block, options) {
-  const doc = block.ownerDocument
-  const walker = doc.createTreeWalker(block, 5 /* SHOW_ELEMENT | SHOW_TEXT */)
-  const nodes = []
+/**
+ * The text of a document in reading order, as runs of text nodes. Every block element ends the run before it
+ * and starts a new one, so text outside any paragraph (directly in a section or div) is read too, and text
+ * around a nested block (`<li>text<ul>..</ul></li>`) is read in the order it appears.
+ * @returns {Generator<{nodes: Array<{node: Node, start: number}>, text: string}>}
+ */
+function* textRuns(body, options) {
+  let nodes = []
   let text = ''
-  let node
-  while ((node = walker.nextNode())) {
-    if (isInSkippedSubtree(node, block.parentElement, options)) continue
-    if (node.nodeType === 1) {
-      // A line break separates words that would otherwise be glued together ("line one<br/>line two")
-      if (node.localName === 'br') text += ' '
+  const runs = []
+  const flush = () => {
+    if (nodes.length && text.trim()) runs.push({ nodes, text })
+    nodes = []
+    text = ''
+  }
+  // Iterative walk: documents can be deeply nested
+  const stack = [{ el: body, child: body.firstChild }]
+  while (stack.length) {
+    const frame = stack[stack.length - 1]
+    const node = frame.child
+    if (!node) {
+      stack.pop()
+      if (BLOCK_TAGS.has(frame.el.localName)) flush()
       continue
     }
-    const value = node.nodeValue
-    if (!value) continue
-    nodes.push({ node, start: text.length })
-    text += value
+    frame.child = node.nextSibling
+    if (node.nodeType === 3) {
+      const value = node.nodeValue
+      if (value) {
+        nodes.push({ node, start: text.length })
+        text += value
+      }
+    } else if (node.nodeType === 1) {
+      if (isSkippedElement(node, options)) continue
+      if (node.localName === 'br') {
+        // A line break separates words that would otherwise be glued together ("line one<br/>line two")
+        text += ' '
+        continue
+      }
+      if (BLOCK_TAGS.has(node.localName)) flush()
+      stack.push({ el: node, child: node.firstChild })
+    }
   }
-  return { nodes, text }
+  flush()
+  yield* runs
 }
 
 function locate(nodes, offset) {
@@ -99,12 +115,27 @@ function getSegmenter(lang) {
   }
 }
 
+const ABBREVIATIONS = new Set(['mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'st', 'mt', 'vs', 'etc', 'inc', 'ltd', 'no', 'fig', 'gen', 'col', 'lt', 'capt', 'sgt', 'rev', 'hon'])
+
 function segment(segmenter, text) {
   if (segmenter) return Array.from(segmenter.segment(text), (s) => ({ text: s.segment, start: s.index }))
+  // Without Intl.Segmenter: split after . ! ? unless it follows an abbreviation like "Mr."
   const out = []
-  const re = /[^.!?]+[.!?]*\s*/g
+  const re = /[^.!?]+(?:[.!?]+|$)\s*/g
   let m
-  while ((m = re.exec(text))) out.push({ text: m[0], start: m.index })
+  let carry = null
+  while ((m = re.exec(text))) {
+    const piece = carry ? { text: carry.text + m[0], start: carry.start } : { text: m[0], start: m.index }
+    const word = piece.text.trimEnd().match(/([A-Za-z]+)\.$/)?.[1]?.toLowerCase()
+    if (word && ABBREVIATIONS.has(word) && re.lastIndex < text.length) {
+      carry = piece
+      continue
+    }
+    carry = null
+    out.push(piece)
+    if (re.lastIndex >= text.length) break
+  }
+  if (carry) out.push(carry)
   return out
 }
 
@@ -132,9 +163,7 @@ async function* readSection(book, spineIndex, segmenter, options) {
   }
 
   let paragraph = spineIndex * PARAGRAPHS_PER_SECTION
-  for (const block of leafBlocks(body, options)) {
-    const { nodes, text } = collectText(block, options)
-    if (!nodes.length || !text.trim()) continue
+  for (const { nodes, text } of textRuns(body, options)) {
     paragraph++
 
     for (const seg of segment(segmenter, text)) {
@@ -168,30 +197,20 @@ async function* readSection(book, spineIndex, segmenter, options) {
  * @param {number} [opts.startSpine] spine index of the start location (the previous section is read too, for rewinding)
  * @param {boolean} [opts.startAtSpine] start at the first sentence of `startSpine` (chapter jump) instead of at a CFI
  * @param {string} [opts.startCfi] the sentence at or after this CFI is flagged `atStart`; up to HISTORY_SENTENCES before it are yielded first
- * @param {string} [opts.lang]
  * @param {boolean} [opts.readFootnotes]
- * @param {number} [opts.firstId] first sentence id
  * @param {Set<string>} [opts.historyCfis] filled with the CFIs of the history sentences that were yielded
  * @param {{cancelled:boolean}} [opts.signal]
  * @returns {AsyncGenerator<{id:number,text:string,cfi:string,spine:number,paragraph:number,atStart?:boolean}>}
  */
 export async function* sentenceStream(book, opts = {}) {
   const options = { readFootnotes: !!opts.readFootnotes }
-  const segmenter = getSegmenter(opts.lang || book.packaging?.metadata?.language)
-  let id = opts.firstId || 0
+  const segmenter = getSegmenter(book.packaging?.metadata?.language)
+  let id = 0
   const startSpine = opts.startSpine || 0
   const hasStart = !!opts.startCfi || !!opts.startAtSpine
   let pastStartCfi = !hasStart
   /** Sentences before the start location, held back until it is found */
   let history = []
-
-  const flushHistory = function* () {
-    for (const h of history) {
-      opts.historyCfis?.add(h.cfi)
-      yield { id: id++, ...h }
-    }
-    history = []
-  }
 
   for (let spineIndex = hasStart ? Math.max(startSpine - 1, 0) : startSpine; spineIndex < book.spine.length; spineIndex++) {
     if (opts.signal?.cancelled) return
@@ -205,10 +224,16 @@ export async function* sentenceStream(book, opts = {}) {
           continue
         }
         pastStartCfi = true
-        yield* flushHistory()
+        const held = history
+        history = []
+        for (const h of held) {
+          opts.historyCfis?.add(h.cfi)
+          yield { id: id++, ...h }
+        }
         yield { id: id++, ...sentence, atStart: true }
         continue
       }
+      if (id >= MAX_SENTENCES) return
       yield { id: id++, ...sentence }
     }
   }
@@ -238,7 +263,7 @@ export async function* sentenceStream(book, opts = {}) {
  */
 export async function* earlierSections(book, opts) {
   const options = { readFootnotes: false }
-  const segmenter = getSegmenter(opts.lang || book.packaging?.metadata?.language)
+  const segmenter = getSegmenter(book.packaging?.metadata?.language)
   let id = -1
   for (let spineIndex = opts.startSpine; spineIndex >= 0; spineIndex--) {
     if (opts.signal?.cancelled) return
@@ -251,7 +276,8 @@ export async function* earlierSections(book, opts) {
     // Ids ascend within the block and every block is lower than the one before it
     const sentences = block.map((sentence, i) => ({ ...sentence, id: id - (block.length - 1 - i) }))
     id -= block.length
-    if (sentences.length) yield { spine: spineIndex, sentences }
+    // Empty blocks are yielded too: the caller tracks how far back the text is complete
+    yield { spine: spineIndex, sentences }
   }
 }
 

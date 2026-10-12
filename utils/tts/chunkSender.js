@@ -15,6 +15,8 @@ export class ChunkSender {
    * @param {AsyncGenerator} params.stream - sentence generator
    * @param {number} params.streamId
    * @param {(chunk: object) => Promise<any>} params.send - delivers a chunk to native
+   * @param {(error: Error) => void} [params.onError]
+   * @param {boolean} [params.expectStart] the stream flags the sentence to start at: the first chunk waits for it
    */
   constructor({ stream, streamId, send, onError, expectStart = true }) {
     this.onError = onError
@@ -28,8 +30,6 @@ export class ChunkSender {
     this.done = false
     this.cancelled = false
     this.running = false
-    /** Seqs below this are already delivered; used to answer needMore */
-    this.paused = false
   }
 
   async run() {

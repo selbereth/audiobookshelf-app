@@ -16,11 +16,14 @@ class AbsTtsWeb extends WebPlugin {
   async setSleepTimer() {}
   async adjustSleepTimer() {}
   async cancelSleepTimer() {}
+  async getWindow() {
+    return { sentences: [], currentId: null }
+  }
   async getVoices() {
     return { voices: [] }
   }
   async getState() {
-    return { active: false, playing: false }
+    return { active: false, playing: false, currentCfi: null }
   }
 }
 

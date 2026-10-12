@@ -1,7 +1,8 @@
 import ePub from 'epubjs'
-import { AbsTts } from '@/plugins/capacitor'
+import { AbsTts, AbsAudioPlayer } from '@/plugins/capacitor'
 import { sentenceStream, earlierSections } from './sentenceStream'
 import { ChunkSender } from './chunkSender'
+import { saveEbookProgress } from '../ebookProgress'
 
 const SAVE_PROGRESS_INTERVAL = 15000
 const PERSIST_INTERVAL = 2000
@@ -35,7 +36,8 @@ class TtsSession {
     this.sentenceHandlers = new Set()
     this.lastSavedAt = 0
     this.currentCfi = null
-    this.readerAttached = false
+    /** Every sentence sent to native, in reading order, without its text: lets a seek find its place without parsing the book again */
+    this.index = []
     this.sleepEndsAt = 0
     this.sleepInterval = null
     /** What the session needs to reopen the book and save progress. See `start` */
@@ -64,12 +66,27 @@ class TtsSession {
     this.store = store
     this.toast = toast
     this.app = app
+    this.strings = app?.$strings || {}
     try {
       const rate = Number(localStorage.getItem(RATE_STORAGE_KEY))
       if (rate > 0) store.commit('tts/setRate', rate)
     } catch (error) {
       // localStorage can be unavailable
     }
+  }
+
+  /** Translated text, falling back to the key */
+  str(key) {
+    return this.strings?.[key] || key
+  }
+
+  /** Where the notification gets the cover from: the downloaded copy's, or the server's (a placeholder is not a cover) */
+  coverUriFor(meta) {
+    const local = meta.localLibraryItem?.coverContentUrl
+    if (local) return local
+    const id = meta.serverLibraryItemId || meta.libraryItem?.id
+    const url = id ? this.store.getters['globals/getLibraryItemCoverSrcById'](id, 'placeholder') : null
+    return url && url.startsWith('http') ? url : ''
   }
 
   /** Table of contents entries that point into the spine, in reading order */
@@ -100,8 +117,8 @@ class TtsSession {
     const sender = new ChunkSender({
       stream: sentenceStream(this.book, { startSpine, startCfi, startAtSpine, historyCfis, signal }),
       streamId: this.streamId,
-      send: (chunk) => AbsTts.appendChunk(chunk),
-      onError: () => this.toast?.error('Failed to read the whole book')
+      send: (chunk) => this.sendChunk(chunk),
+      onError: () => this.toast?.error(this.str('MessageTtsFailedToReadBook'))
     })
     const cancel = sender.cancel.bind(sender)
     sender.cancel = () => {
@@ -112,7 +129,19 @@ class TtsSession {
     sender.position = { startCfi: startAtSpine ? null : startCfi, startSpine }
     sender.historyCfis = historyCfis
     this.sender = sender
+    this.index = []
+    // Every section from here on is buffered whole once the forward stream has passed it. The start section
+    // is only whole from its start position, its earlier part arrives with the earlier sections.
+    this.fullFrom = startCfi && !startAtSpine ? startSpine + 1 : startSpine
     return sender
+  }
+
+  /** Sends a chunk to native and remembers where each of its sentences is */
+  sendChunk(chunk) {
+    if (chunk.streamId === this.streamId) {
+      for (const sentence of chunk.sentences) this.index.push({ id: sentence.id, cfi: sentence.cfi, spine: sentence.spine })
+    }
+    return AbsTts.appendChunk(chunk)
   }
 
   /**
@@ -126,7 +155,12 @@ class TtsSession {
     try {
       for await (const block of earlierSections(this.book, { ...sender.position, historyCfis, signal })) {
         if (signal.cancelled || streamId !== this.streamId) return
-        await AbsTts.prependChunk({ streamId, sentences: block.sentences })
+        if (streamId !== this.streamId) return
+        if (block.sentences.length) {
+          this.index = block.sentences.map((x) => ({ id: x.id, cfi: x.cfi, spine: x.spine })).concat(this.index)
+          await AbsTts.prependChunk({ streamId, sentences: block.sentences })
+        }
+        this.fullFrom = block.spine
         await new Promise((resolve) => setTimeout(resolve, 0))
       }
     } catch (error) {
@@ -143,8 +177,50 @@ class TtsSession {
     this.runSender(sender)
   }
 
+  /** Is every sentence of this section already in the native queue? */
+  isBuffered(spine) {
+    if (spine < this.fullFrom || !this.index.length) return false
+    const last = this.index[this.index.length - 1]
+    // Either the forward stream has moved on to a later section or it has sent the whole book
+    return last.spine > spine || (this.sender?.done && last.spine >= spine)
+  }
+
+  /** Index of the first buffered sentence for which `isAtOrAfter(entry)` is true (binary search: the index is in reading order) */
+  findInBuffer(isAtOrAfter) {
+    let lo = 0
+    let hi = this.index.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (isAtOrAfter(this.index[mid])) hi = mid
+      else lo = mid + 1
+    }
+    return lo < this.index.length ? this.index[lo] : null
+  }
+
+  /** Jump to text that native already has: no need to read the book again. Returns false when it is not buffered. */
+  async seekInBuffer({ spine, cfi }) {
+    if (!this.isBuffered(spine)) return false
+    const compare = cfi ? new ePub.CFI() : null
+    const target = this.findInBuffer(cfi ? (entry) => entry.spine > spine || (entry.spine === spine && compare.compare(entry.cfi, cfi) >= 0) : (entry) => entry.spine >= spine)
+    if (!target || (!cfi && target.spine !== spine)) return false
+    const result = await AbsTts.seekToSentence({ id: target.id })
+    return !!result?.found
+  }
+
+  /**
+   * Read aloud is running (or paused) for this book and the reader wants it to read from `cfi` (the top of the page they are
+   * looking at): move there and play. Not a new session: text the native queue already has is used as it is.
+   */
+  async readFrom(cfi) {
+    if (!this.active || this.store.state.tts.restored || !this.book || !cfi) return
+    const spine = this.book.spine.get(cfi)?.index ?? 0
+    if (!(await this.seekInBuffer({ spine, cfi }))) await this.restartAt({ startCfi: cfi, startSpine: spine })
+    if (!this.store.state.tts.playing) await AbsTts.play()
+  }
+
   async jumpToChapter(chapter) {
     if (!chapter) return
+    if (await this.seekInBuffer({ spine: chapter.spine })) return
     await this.restartAt({ startSpine: chapter.spine, startAtSpine: true })
   }
 
@@ -165,6 +241,7 @@ class TtsSession {
     if (!locations?.length()) return
     const cfi = locations.cfiFromPercentage(Math.min(Math.max(percent, 0), 100) / 100)
     const startSpine = this.book.spine.get(cfi)?.index || 0
+    if (await this.seekInBuffer({ spine: startSpine, cfi })) return
     await this.restartAt({ startCfi: cfi, startSpine })
   }
 
@@ -180,8 +257,12 @@ class TtsSession {
 
   // --- Sleep timer: native does the work (so it fires with the screen off), this only mirrors it for the UI ---
   async setSleepTimer({ ms, isChapterTime }) {
-    if (this.store.state.tts.restored) return this.toast?.info('Press play first')
-    await AbsTts.setSleepTimer(isChapterTime ? { endOfChapter: true } : { ms })
+    if (this.store.state.tts.restored) return this.toast?.info(this.str('MessageTtsPressPlayFirst'))
+    if (!isChapterTime) return AbsTts.setSleepTimer({ ms })
+    // Pause where the next chapter of the table of contents starts (or at the end of the book)
+    const { chapters, currentChapterIndex } = this.store.state.tts
+    const next = chapters[currentChapterIndex + 1]
+    await AbsTts.setSleepTimer({ endOfChapter: true, untilSpine: next ? next.spine : Number.MAX_SAFE_INTEGER })
   }
 
   adjustSleepTimer(ms) {
@@ -226,7 +307,7 @@ class TtsSession {
     } catch (error) {
       // Nothing is running: do not leave a player card for a session that never started
       console.error('[TtsSession] failed to start', error)
-      this.toast?.error('Failed to start read aloud')
+      this.toast?.error(this.str('MessageTtsFailedToStart'))
       await this.cleanup(true, true)
     } finally {
       this.starting = false
@@ -237,6 +318,8 @@ class TtsSession {
     // A session restored after the app was closed has nothing running: start over it without stopping
     if (this.active && !this.store.state.tts.restored) await this.stop()
     this.bookFromReader = bookFromReader
+    // Only one thing owns playback. Android pauses the audiobook natively when read aloud starts; iOS needs telling
+    if (this.app?.$platform === 'ios') await AbsAudioPlayer.pausePlayer?.().catch(() => {})
     const { libraryItem, localLibraryItem } = meta
     const metadata = book.packaging?.metadata || {}
     this.book = book
@@ -258,6 +341,8 @@ class TtsSession {
 
     this.nativeListeners = [
       await AbsTts.addListener('sentence', (data) => this.onSentence(data)),
+      // iOS reports the length of the word, Android where it ends
+      await AbsTts.addListener('word', (data) => this.store.commit('tts/setWord', { id: data.id, start: data.start, end: data.end ?? data.start + data.length })),
       await AbsTts.addListener('state', (data) => {
         this.store.commit('tts/setPlaying', data.playing)
         if (!data.playing) {
@@ -285,7 +370,7 @@ class TtsSession {
       await AbsTts.addListener('sleepTimer', (data) => this.onSleepTimer(data)),
       await AbsTts.addListener('error', (data) => {
         console.error('[TtsSession] error', data)
-        this.toast?.error(data.message || 'Text to speech error')
+        this.toast?.error(data.message || this.str('MessageTtsError'))
       })
     ]
 
@@ -297,6 +382,7 @@ class TtsSession {
       title: this.store.state.tts.title,
       author: this.store.state.tts.author,
       lang: metadata.language,
+      coverUri: this.coverUriFor(meta),
       rate: this.store.state.tts.rate,
       pitch: 1,
       streamId: this.streamId
@@ -324,6 +410,9 @@ class TtsSession {
           serverLibraryItemId: m.serverLibraryItemId,
           localLibraryItemId: m.localLibraryItemId,
           keepProgress: m.keepProgress,
+          // The session belongs to whoever was signed in to this server: not offered to anyone else
+          userId: this.store.state.user.user?.id || null,
+          serverAddress: this.store.getters['user/getServerAddress'] || null,
           cfi: this.currentCfi,
           progress: this.store.state.tts.progress
         })
@@ -354,6 +443,13 @@ class TtsSession {
       saved = null
     }
     if (!saved?.libraryItem?.id || !saved.cfi || !saved.url) return
+    const user = this.store.state.user.user
+    const serverAddress = this.store.getters['user/getServerAddress']
+    // Signed in as someone else or to another server (a downloaded book has no user or server to compare when offline)
+    if ((user && saved.userId && user.id !== saved.userId) || (serverAddress && saved.serverAddress && serverAddress !== saved.serverAddress)) {
+      this.forgetPersisted()
+      return
+    }
     this.meta = { ...saved }
     this.currentCfi = saved.cfi
     this.store.commit('tts/setRestoredSession', {
@@ -368,6 +464,14 @@ class TtsSession {
     })
   }
 
+  /** The user finished loading after a session was restored: if it belongs to someone else, forget it */
+  checkRestoredOwner() {
+    const m = this.meta
+    const user = this.store.state.user.user
+    if (!this.store.state.tts.restored || !m || !user || !m.userId || user.id === m.userId) return
+    this.cleanup(false, true)
+  }
+
   /** The listener pressed play on a restored session: open the book and carry on from where it was */
   async resume() {
     const meta = this.meta
@@ -377,7 +481,7 @@ class TtsSession {
       await this.start({ book, startCfi: meta.cfi, meta })
     } catch (error) {
       console.error('[TtsSession] failed to resume', error)
-      this.toast?.error('Failed to open the book')
+      this.toast?.error(this.str('MessageTtsFailedToOpenBook'))
     }
   }
 
@@ -391,6 +495,8 @@ class TtsSession {
       const raw = localStorage.getItem(`ebookLocations-${meta.libraryItem?.id}`)
       const locations = raw && JSON.parse(raw).locations
       if (locations) book.locations.load(locations)
+      // Not generated by the reader yet: without them there is no progress percentage and no seeking by percent
+      else book.locations.generate(100).catch((error) => console.warn('[TtsSession] failed to generate locations', error))
     } catch (error) {
       console.warn('[TtsSession] failed to load locations', error)
     }
@@ -403,13 +509,7 @@ class TtsSession {
   async saveProgress(payload) {
     const m = this.meta
     if (!m?.keepProgress) return
-    if (m.localLibraryItemId) {
-      const response = await this.app.$db.updateLocalEbookProgress({ localLibraryItemId: m.localLibraryItemId, ...payload })
-      if (response?.localMediaProgress) this.store.commit('globals/updateLocalMediaProgress', response.localMediaProgress)
-    }
-    if (m.serverLibraryItemId) {
-      this.app.$nativeHttp.patch(`/api/me/progress/${m.serverLibraryItemId}`, payload).catch((error) => console.error('[TtsSession] failed to save server progress', error))
-    }
+    await saveEbookProgress(this.app, { localLibraryItemId: m.localLibraryItemId, serverLibraryItemId: m.serverLibraryItemId }, payload)
   }
 
   saveProgressNow() {
@@ -467,12 +567,14 @@ class TtsSession {
    */
   attachReader(handler) {
     this.sentenceHandlers.add(handler)
-    this.readerAttached = true
   }
 
   detachReader(handler) {
     this.sentenceHandlers.delete(handler)
-    this.readerAttached = this.sentenceHandlers.size > 0
+  }
+
+  get readerAttached() {
+    return this.sentenceHandlers.size > 0
   }
 
   /** Where chapter `index` starts and ends in the book as percentages, from the reader's location data. 0/0 when not known. */
@@ -509,7 +611,6 @@ class TtsSession {
     if (index !== this.store.state.tts.currentChapterIndex) {
       this.store.commit('tts/setCurrentChapterIndex', index)
       this.store.commit('tts/setChapterRange', this.chapterRange(index))
-      this.chapterStartSpine = index >= 0 ? chapters[index].spine : spine
       this.sentencesIntoChapter = 0
     }
     this.sentencesIntoChapter = (this.sentencesIntoChapter || 0) + 1
@@ -519,6 +620,8 @@ class TtsSession {
   /** Current native state, used when the app or reader comes back to the foreground */
   async getState() {
     const state = await AbsTts.getState()
+    // Native is not up yet while the session is starting: that is not a session that died
+    if (this.starting) return state
     if (!state.active && this.active && !this.store.state.tts.restored) {
       await this.cleanup()
     } else if (this.active) {
@@ -529,6 +632,7 @@ class TtsSession {
 
   onSentence(data) {
     this.currentCfi = data.cfi
+    this.store.commit('tts/setCurrentSentence', data.id)
     this.updateCurrentChapter(data.spine)
     this.sentenceHandlers.forEach((h) => h.onSentence(data))
 

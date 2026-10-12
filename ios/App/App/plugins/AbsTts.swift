@@ -26,6 +26,7 @@ public class AbsTts: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesizerDelegate {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "appendChunk", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "prependChunk", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "play", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "pause", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
@@ -36,6 +37,10 @@ public class AbsTts: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesizerDelegate {
         CAPPluginMethod(name: "setPitch", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setVoice", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getVoices", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setSleepTimer", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "adjustSleepTimer", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "cancelSleepTimer", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getWindow", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getState", returnType: CAPPluginReturnPromise)
     ]
 
@@ -44,6 +49,14 @@ public class AbsTts: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesizerDelegate {
 
     private var synth: AVSpeechSynthesizer?
     private var store: [TtsSentence] = []
+    // Where each sentence is in `store`, found without scanning it. Text added at the front moves every position
+    // by the same amount, so positions are kept relative to `shift` instead of being rewritten.
+    private var positions: [Int: Int] = [:]
+    private var shift = 0
+    /// Pause when reading reaches the section with this index (where the next chapter starts)
+    private var sleepUntilSpine: Int?
+    private var sleepTimer: Timer?
+    private var sleepEndsAt: Date?
     private var cursor = 0
     private var nextToQueue = 0
     private var queuedIds = Set<Int>()
@@ -97,14 +110,114 @@ public class AbsTts: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesizerDelegate {
             guard let id = item["id"] as? Int, let text = item["text"] as? String, let cfi = item["cfi"] as? String else { continue }
             list.append(TtsSentence(id: id, text: text, cfi: cfi, spine: item["spine"] as? Int ?? 0, paragraph: item["paragraph"] as? Int ?? 0))
         }
+        let startId = call.getInt("startId")
+        var positioned: TtsSentence?
         queue.sync {
             guard sid == streamId, seq > lastSeq else { return }
             lastSeq = seq
-            store.append(contentsOf: list)
+            appendToStore(list)
             if done { streamDone = true }
+            if let startId = startId, let idx = indexOfId(startId) {
+                // The first chunk holds history before the start: begin at the sentence the listener was at
+                cursor = idx
+                flushLocked()
+                // Nothing starts speaking while paused, so tell the UI where we are now
+                if !wantPlaying { positioned = store[idx] }
+            }
             if wantPlaying { refillLocked() }
         }
+        if let s = positioned { emitSentence(s) }
         call.resolve()
+    }
+
+    /// Text from before what was sent first, so the listener can rewind to the start of the book
+    @objc func prependChunk(_ call: CAPPluginCall) {
+        let sid = call.getInt("streamId") ?? 0
+        var list: [TtsSentence] = []
+        for item in call.getArray("sentences", JSObject.self) ?? [] {
+            guard let id = item["id"] as? Int, let text = item["text"] as? String, let cfi = item["cfi"] as? String else { continue }
+            list.append(TtsSentence(id: id, text: text, cfi: cfi, spine: item["spine"] as? Int ?? 0, paragraph: item["paragraph"] as? Int ?? 0))
+        }
+        queue.sync {
+            guard sid == streamId, !list.isEmpty else { return }
+            prependToStore(list)
+            cursor += list.count
+            nextToQueue += list.count
+        }
+        call.resolve()
+    }
+
+    // MARK: - Sleep timer
+
+    @objc func setSleepTimer(_ call: CAPPluginCall) {
+        cancelSleepTimerInternal(notify: false)
+        if call.getBool("endOfChapter") ?? false {
+            // JS sends a very large number for "no later chapter": the end of the book
+            var until: Int?
+            if let n = call.getValue("untilSpine") as? NSNumber { until = Int(clamping: n.int64Value) }
+            queue.sync { sleepUntilSpine = until ?? (cursor < store.count ? store[cursor].spine + 1 : nil) }
+            notifyListeners("sleepTimer", data: ["remainingMs": 0, "running": queue.sync { sleepUntilSpine != nil }, "atChapterEnd": true])
+        } else {
+            let ms = Double(call.getInt("ms") ?? 0)
+            startSleepTimer(ms: ms)
+        }
+        call.resolve()
+    }
+
+    @objc func adjustSleepTimer(_ call: CAPPluginCall) {
+        guard let ends = sleepEndsAt else { return call.resolve() }
+        let delta = Double(call.getInt("ms") ?? 0)
+        startSleepTimer(ms: max(ends.timeIntervalSinceNow * 1000 + delta, 1000))
+        call.resolve()
+    }
+
+    @objc func cancelSleepTimer(_ call: CAPPluginCall) {
+        cancelSleepTimerInternal(notify: true)
+        call.resolve()
+    }
+
+    private func startSleepTimer(ms: Double) {
+        cancelSleepTimerInternal(notify: false)
+        sleepEndsAt = Date().addingTimeInterval(ms / 1000)
+        DispatchQueue.main.async {
+            self.sleepTimer = Timer.scheduledTimer(withTimeInterval: ms / 1000, repeats: false) { [weak self] _ in
+                self?.sleepEndsAt = nil
+                self?.pausePlayback(reason: "sleep")
+                self?.notifyListeners("sleepTimer", data: ["remainingMs": 0, "running": false, "atChapterEnd": false])
+            }
+        }
+        notifyListeners("sleepTimer", data: ["remainingMs": ms, "running": true, "atChapterEnd": false])
+    }
+
+    private func cancelSleepTimerInternal(notify: Bool) {
+        DispatchQueue.main.async { self.sleepTimer?.invalidate(); self.sleepTimer = nil }
+        sleepEndsAt = nil
+        queue.sync { sleepUntilSpine = nil }
+        if notify { notifyListeners("sleepTimer", data: ["remainingMs": 0, "running": false, "atChapterEnd": false]) }
+    }
+
+    // MARK: - Sentence store (call with `queue` held)
+
+    private func indexOfId(_ id: Int) -> Int? {
+        guard let p = positions[id] else { return nil }
+        return p + shift
+    }
+
+    private func appendToStore(_ sentences: [TtsSentence]) {
+        for (i, s) in sentences.enumerated() { positions[s.id] = store.count + i - shift }
+        store.append(contentsOf: sentences)
+    }
+
+    private func prependToStore(_ sentences: [TtsSentence]) {
+        shift += sentences.count
+        for (i, s) in sentences.enumerated() { positions[s.id] = i - shift }
+        store.insert(contentsOf: sentences, at: 0)
+    }
+
+    private func clearStore() {
+        store.removeAll()
+        positions.removeAll()
+        shift = 0
     }
 
     @objc func play(_ call: CAPPluginCall) {
@@ -139,7 +252,7 @@ public class AbsTts: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesizerDelegate {
         var found = false
         var current: TtsSentence?
         queue.sync {
-            if let idx = store.firstIndex(where: { $0.id == id }) {
+            if let idx = indexOfId(id) {
                 cursor = idx
                 flushLocked()
                 if wantPlaying { refillLocked() }
@@ -154,9 +267,10 @@ public class AbsTts: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesizerDelegate {
     @objc func reset(_ call: CAPPluginCall) {
         queue.sync {
             flushLocked()
-            store.removeAll()
+            clearStore()
             cursor = 0
             nextToQueue = 0
+            sleepUntilSpine = nil
             streamId = call.getInt("streamId") ?? 0
             lastSeq = -1
             streamDone = false
@@ -202,6 +316,22 @@ public class AbsTts: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesizerDelegate {
             ["id": v.identifier, "name": v.name, "lang": v.language, "quality": v.quality.rawValue, "network": false]
         }
         call.resolve(["voices": voices])
+    }
+
+    /// The sentence being spoken with some before and after it: the text view of the player shows them
+    @objc func getWindow(_ call: CAPPluginCall) {
+        let before = call.getInt("before") ?? 1
+        let after = call.getInt("after") ?? 30
+        queue.sync {
+            guard !store.isEmpty else { return call.resolve(["sentences": [], "currentId": NSNull()]) }
+            let from = max(cursor - before, 0)
+            let to = min(cursor + after + 1, store.count)
+            let slice = from < to ? Array(store[from..<to]) : []
+            call.resolve([
+                "sentences": slice.map { ["id": $0.id, "text": $0.text, "paragraph": $0.paragraph] },
+                "currentId": cursor < store.count ? store[cursor].id : NSNull()
+            ])
+        }
     }
 
     @objc func getState(_ call: CAPPluginCall) {
@@ -332,7 +462,8 @@ public class AbsTts: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesizerDelegate {
         playing = false
         active = false
         flushLocked()
-        store.removeAll()
+        clearStore()
+        sleepUntilSpine = nil
         cursor = 0
         nextToQueue = 0
         lastSeq = -1
@@ -352,7 +483,7 @@ public class AbsTts: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesizerDelegate {
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
         var sentence: TtsSentence?
         queue.sync {
-            guard let id = ids[ObjectIdentifier(utterance)], let idx = store.firstIndex(where: { $0.id == id }) else { return }
+            guard let id = ids[ObjectIdentifier(utterance)], let idx = indexOfId(id) else { return }
             cursor = idx
             sentence = store[idx]
         }
@@ -363,20 +494,26 @@ public class AbsTts: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesizerDelegate {
         var id: Int?
         queue.sync { id = ids[ObjectIdentifier(utterance)] }
         if let id = id {
-            notifyListeners("word", data: ["id": id, "start": characterRange.location, "length": characterRange.length])
+            notifyListeners("word", data: ["id": id, "start": characterRange.location, "end": characterRange.location + characterRange.length, "length": characterRange.length])
         }
     }
 
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         var ended = false
         var needMore = false
+        var sleepNow = false
         var sid = 0
         var seq = 0
         queue.sync {
             guard let id = ids.removeValue(forKey: ObjectIdentifier(utterance)) else { return } // flushed
             queuedIds.remove(id)
-            if let idx = store.firstIndex(where: { $0.id == id }) { cursor = min(idx + 1, store.count) }
-            if wantPlaying { refillLocked() }
+            if let idx = indexOfId(id) { cursor = min(idx + 1, store.count) }
+            if let until = sleepUntilSpine, cursor < store.count, store[cursor].spine >= until {
+                // The next chapter starts: the cursor is on its first sentence so resuming continues there
+                sleepUntilSpine = nil
+                sleepNow = true
+            }
+            if wantPlaying && !sleepNow { refillLocked() }
             if queuedIds.isEmpty && nextToQueue >= store.count && streamDone {
                 ended = true
                 wantPlaying = false
@@ -388,6 +525,11 @@ public class AbsTts: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesizerDelegate {
                 sid = streamId
                 seq = lastSeq
             }
+        }
+        if sleepNow {
+            pausePlayback(reason: "sleep")
+            notifyListeners("sleepTimer", data: ["remainingMs": 0, "running": false, "atChapterEnd": false])
+            return
         }
         if needMore { notifyListeners("needMore", data: ["streamId": sid, "lastSeq": seq]) }
         if ended {

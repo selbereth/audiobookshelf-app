@@ -34,6 +34,9 @@ class AbsTts : Plugin() {
       notifyListeners("needMore", JSObject().put("streamId", streamId).put("lastSeq", lastSeq))
     }
     override fun onEnded() { notifyListeners("ended", JSObject()) }
+    override fun onWord(id: Int, start: Int, end: Int) {
+      notifyListeners("word", JSObject().put("id", id).put("start", start).put("end", end))
+    }
     override fun onSleepTimer(remainingMs: Long, running: Boolean, atChapterEnd: Boolean) {
       notifyListeners("sleepTimer", JSObject().put("remainingMs", remainingMs).put("running", running).put("atChapterEnd", atChapterEnd))
     }
@@ -62,6 +65,7 @@ class AbsTts : Plugin() {
       action = TtsService.ACTION_START
       putExtra(TtsService.EXTRA_TITLE, call.getString("title", ""))
       putExtra(TtsService.EXTRA_AUTHOR, call.getString("author", ""))
+      putExtra(TtsService.EXTRA_COVER_URI, call.getString("coverUri", ""))
     }
     ContextCompat.startForegroundService(context, intent)
 
@@ -174,7 +178,13 @@ class AbsTts : Plugin() {
   @PluginMethod
   fun setSleepTimer(call: PluginCall) {
     val s = svc ?: return call.reject("No TTS session")
-    if (call.getBoolean("endOfChapter", false) == true) s.setSleepAtChapterEnd() else s.setSleepTimer(call.data.optLong("ms", 0L))
+    if (call.getBoolean("endOfChapter", false) == true) {
+      // JS sends a very large number for "no later chapter": the end of the book
+      val until = call.data.optLong("untilSpine", -1L)
+      s.setSleepAtChapterEnd(if (until < 0) null else until.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+    } else {
+      s.setSleepTimer(call.data.optLong("ms", 0L))
+    }
     call.resolve()
   }
 
@@ -188,6 +198,15 @@ class AbsTts : Plugin() {
   fun cancelSleepTimer(call: PluginCall) {
     svc?.cancelSleepTimer()
     call.resolve()
+  }
+
+  /** The sentence being spoken with some before and after it: the text view of the player shows them */
+  @PluginMethod
+  fun getWindow(call: PluginCall) {
+    val sentences = svc?.controller?.window(call.getInt("before", 1) ?: 1, call.getInt("after", 30) ?: 30) ?: emptyList()
+    val arr = JSArray()
+    sentences.forEach { arr.put(JSObject().put("id", it.id).put("text", it.text).put("paragraph", it.paragraph)) }
+    call.resolve(JSObject().put("sentences", arr).put("currentId", svc?.controller?.currentSentence?.id))
   }
 
   @PluginMethod

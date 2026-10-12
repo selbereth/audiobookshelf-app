@@ -14,11 +14,23 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.graphics.Bitmap
+import android.net.Uri
 import android.os.SystemClock
+import androidx.core.content.FileProvider
+import com.audiobookshelf.app.BuildConfig
+import com.audiobookshelf.app.player.resolveUriAsBitmap
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -37,8 +49,15 @@ class TtsService : Service() {
     const val NOTIFICATION_ID = 7421
     const val ACTION_START = "com.audiobookshelf.app.tts.START"
     const val ACTION_STOP = "com.audiobookshelf.app.tts.STOP"
+    /** A button in the notification: the key code to act on is in [EXTRA_KEY_CODE] */
+    const val ACTION_KEY = "com.audiobookshelf.app.tts.KEY"
+    const val EXTRA_KEY_CODE = "keyCode"
     const val EXTRA_TITLE = "title"
     const val EXTRA_AUTHOR = "author"
+    const val EXTRA_COVER_URI = "coverUri"
+    /** The card Android draws for the media session shows these where the audiobook player shows its jump back and forward */
+    const val CUSTOM_REWIND = "tts_rewind"
+    const val CUSTOM_FORWARD = "tts_forward"
 
     @Volatile var instance: TtsService? = null
 
@@ -63,6 +82,10 @@ class TtsService : Service() {
   private var wakeLock: PowerManager.WakeLock? = null
   private var title = ""
   private var author = ""
+  /** The cover, as in the audiobook notification: it is what gives the notification its colours */
+  private var cover: Bitmap? = null
+  private var coverJob: Job? = null
+  private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var noisyRegistered = false
 
   private val noisyReceiver = object : BroadcastReceiver() {
@@ -101,17 +124,24 @@ class TtsService : Service() {
       eventListener?.onSentence(s)
     }
     override fun onState(playing: Boolean, reason: String?) {
-      if (playing) acquireResources() else releaseResources()
-      updateSession()
+      mainHandler.post {
+        if (playing) acquireResources() else releaseResources()
+        updateSession()
+      }
       eventListener?.onState(playing, reason)
     }
     override fun onNeedMore(streamId: Int, lastSeq: Int) { eventListener?.onNeedMore(streamId, lastSeq) }
     override fun onSleepTimer(remainingMs: Long, running: Boolean, atChapterEnd: Boolean) {
       eventListener?.onSleepTimer(remainingMs, running, atChapterEnd)
     }
+    override fun onWord(id: Int, start: Int, end: Int) { eventListener?.onWord(id, start, end) }
     override fun onEnded() {
-      releaseResources()
-      updateSession()
+      mainHandler.post {
+        releaseResources()
+        updateSession()
+      }
+      // Nothing is listening when the app was closed: do not leave a finished read aloud notification behind
+      if (eventListener == null) mainHandler.post { requestStop() }
       eventListener?.onEnded()
     }
     override fun onError(code: String, message: String) { eventListener?.onError(code, message) }
@@ -132,9 +162,16 @@ class TtsService : Service() {
         override fun onPause() { this@TtsService.controller.pause() }
         override fun onSkipToNext() { this@TtsService.controller.skip("sentence", 1) }
         override fun onSkipToPrevious() { this@TtsService.controller.skip("sentence", -1) }
-        override fun onFastForward() { this@TtsService.controller.skip("paragraph", 1) }
-        override fun onRewind() { this@TtsService.controller.skip("paragraph", -1) }
+        // Like the audiobook player the transport buttons are rewind and fast-forward: here a sentence back and forward
+        override fun onFastForward() { this@TtsService.controller.skip("sentence", 1) }
+        override fun onRewind() { this@TtsService.controller.skip("sentence", -1) }
         override fun onStop() { requestStop() }
+        override fun onCustomAction(action: String?, extras: Bundle?) {
+          when (action) {
+            CUSTOM_REWIND -> this@TtsService.controller.skip("sentence", -1)
+            CUSTOM_FORWARD -> this@TtsService.controller.skip("sentence", 1)
+          }
+        }
       })
       isActive = true
     }
@@ -149,7 +186,9 @@ class TtsService : Service() {
       ACTION_START -> {
         title = intent.getStringExtra(EXTRA_TITLE) ?: ""
         author = intent.getStringExtra(EXTRA_AUTHOR) ?: ""
+        loadCover(intent.getStringExtra(EXTRA_COVER_URI))
       }
+      ACTION_KEY -> handleMediaKey(intent.getIntExtra(EXTRA_KEY_CODE, 0))
       else -> MediaButtonReceiver.handleIntent(session, intent)
     }
     updateSession()
@@ -157,7 +196,8 @@ class TtsService : Service() {
   }
 
   // --- Sleep timer: lives in the service so it still fires with the screen off ---
-  private val sleepHandler = Handler(Looper.getMainLooper())
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private val sleepHandler = mainHandler
   private var sleepEndsAt = 0L // SystemClock.elapsedRealtime, 0 = no timer
   private val sleepRunnable = Runnable {
     sleepEndsAt = 0
@@ -172,11 +212,11 @@ class TtsService : Service() {
     eventListener?.onSleepTimer(ms, true, false)
   }
 
-  /** Pause when the current chapter (spine item) is finished */
-  fun setSleepAtChapterEnd() {
+  /** Pause when reading reaches the section with index [untilSpine] (where the next chapter starts); the next section when not given */
+  fun setSleepAtChapterEnd(untilSpine: Int?) {
     cancelSleepTimer(notify = false)
-    controller.sleepSpine = controller.currentSentence?.spine
-    eventListener?.onSleepTimer(0, controller.sleepSpine != null, true)
+    controller.sleepUntilSpine = untilSpine ?: controller.currentSentence?.spine?.plus(1)
+    eventListener?.onSleepTimer(0, controller.sleepUntilSpine != null, true)
   }
 
   fun adjustSleepTimer(deltaMs: Long) {
@@ -188,7 +228,7 @@ class TtsService : Service() {
   fun cancelSleepTimer(notify: Boolean = true) {
     sleepHandler.removeCallbacks(sleepRunnable)
     sleepEndsAt = 0
-    controller.sleepSpine = null
+    controller.sleepUntilSpine = null
     if (notify) eventListener?.onSleepTimer(0, false, false)
   }
 
@@ -200,8 +240,8 @@ class TtsService : Service() {
       android.view.KeyEvent.KEYCODE_HEADSETHOOK, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (controller.playing) controller.pause() else startPlayback()
       android.view.KeyEvent.KEYCODE_MEDIA_NEXT -> controller.skip("sentence", 1)
       android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS -> controller.skip("sentence", -1)
-      android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> controller.skip("paragraph", 1)
-      android.view.KeyEvent.KEYCODE_MEDIA_REWIND -> controller.skip("paragraph", -1)
+      android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> controller.skip("sentence", 1)
+      android.view.KeyEvent.KEYCODE_MEDIA_REWIND -> controller.skip("sentence", -1)
       android.view.KeyEvent.KEYCODE_MEDIA_STOP -> requestStop()
     }
   }
@@ -252,8 +292,27 @@ class TtsService : Service() {
   private fun createChannel() {
     val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     if (nm.getNotificationChannel(CHANNEL_ID) == null) {
-      val channel = NotificationChannel(CHANNEL_ID, "Read aloud", NotificationManager.IMPORTANCE_LOW)
+      val channel = NotificationChannel(CHANNEL_ID, getString(R.string.tts_channel_name), NotificationManager.IMPORTANCE_LOW)
+      channel.lightColor = android.graphics.Color.DKGRAY
+      channel.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
       nm.createNotificationChannel(channel)
+    }
+  }
+
+  /** Same sources as the audiobook player: a downloaded item's local cover, otherwise the server's cover image */
+  private fun loadCover(uriString: String?) {
+    coverJob?.cancel()
+    if (uriString.isNullOrBlank()) return
+    coverJob = scope.launch {
+      var uri = Uri.parse(uriString)
+      if (uri.scheme == "file") {
+        uri = FileProvider.getUriForFile(this@TtsService, "${BuildConfig.APPLICATION_ID}.fileprovider", java.io.File(uri.path ?: return@launch))
+      }
+      val bitmap = resolveUriAsBitmap(this@TtsService, uri)
+      if (bitmap != null) {
+        cover = bitmap
+        updateSession()
+      }
     }
   }
 
@@ -262,9 +321,10 @@ class TtsService : Service() {
     val state = PlaybackStateCompat.Builder()
       .setActions(
         PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or PlaybackStateCompat.ACTION_PLAY_PAUSE or
-          PlaybackStateCompat.ACTION_SKIP_TO_NEXT or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
           PlaybackStateCompat.ACTION_FAST_FORWARD or PlaybackStateCompat.ACTION_REWIND or PlaybackStateCompat.ACTION_STOP
       )
+      .addCustomAction(CUSTOM_REWIND, getString(R.string.tts_action_previous), com.google.android.exoplayer2.ui.R.drawable.exo_notification_rewind)
+      .addCustomAction(CUSTOM_FORWARD, getString(R.string.tts_action_next), com.google.android.exoplayer2.ui.R.drawable.exo_notification_fastforward)
       .setState(if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1f)
       .build()
     session.setPlaybackState(state)
@@ -272,6 +332,8 @@ class TtsService : Service() {
       MediaMetadataCompat.Builder()
         .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
         .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, author)
+        .putBitmap(MediaMetadataCompat.METADATA_KEY_ART, cover)
+        .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, cover)
         .build()
     )
 
@@ -288,23 +350,30 @@ class TtsService : Service() {
       this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
       PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
     )
-    fun action(icon: Int, label: String, code: Long) =
-      NotificationCompat.Action(icon, label, MediaButtonReceiver.buildMediaButtonPendingIntent(this, code))
+    fun action(icon: Int, label: String, keyCode: Int): NotificationCompat.Action {
+      val intent = Intent(this, TtsService::class.java).setAction(ACTION_KEY).putExtra(EXTRA_KEY_CODE, keyCode)
+      val pending = PendingIntent.getForegroundService(this, keyCode, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+      return NotificationCompat.Action(icon, label, pending)
+    }
 
     val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-      .setSmallIcon(R.mipmap.ic_launcher)
+      // The same small icon, large icon, priority and badge as the audiobook notification
+      .setSmallIcon(R.drawable.icon_monochrome)
+      .setLargeIcon(cover)
+      .setBadgeIconType(NotificationCompat.BADGE_ICON_LARGE)
+      .setPriority(NotificationCompat.PRIORITY_MAX)
       .setContentTitle(title)
       .setContentText(author)
       .setContentIntent(openIntent)
       .setOnlyAlertOnce(true)
       .setOngoing(playing)
       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-      .addAction(action(android.R.drawable.ic_media_previous, "Previous", PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS))
+      .addAction(action(com.google.android.exoplayer2.ui.R.drawable.exo_notification_rewind, getString(R.string.tts_action_previous), android.view.KeyEvent.KEYCODE_MEDIA_REWIND))
       .addAction(
-        if (playing) action(android.R.drawable.ic_media_pause, "Pause", PlaybackStateCompat.ACTION_PAUSE)
-        else action(android.R.drawable.ic_media_play, "Play", PlaybackStateCompat.ACTION_PLAY)
+        if (playing) action(com.google.android.exoplayer2.ui.R.drawable.exo_notification_pause, getString(R.string.tts_action_pause), android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
+        else action(com.google.android.exoplayer2.ui.R.drawable.exo_notification_play, getString(R.string.tts_action_play), android.view.KeyEvent.KEYCODE_MEDIA_PLAY)
       )
-      .addAction(action(android.R.drawable.ic_media_next, "Next", PlaybackStateCompat.ACTION_SKIP_TO_NEXT))
+      .addAction(action(com.google.android.exoplayer2.ui.R.drawable.exo_notification_fastforward, getString(R.string.tts_action_next), android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD))
       .setStyle(androidx.media.app.NotificationCompat.MediaStyle().setMediaSession(session.sessionToken).setShowActionsInCompactView(0, 1, 2))
     return builder.build()
   }
@@ -321,6 +390,7 @@ class TtsService : Service() {
     // requestStop() already told the JS side. Only the system killing the service gets here with instance still set
     if (instance === this) eventListener?.onState(false, "stopped")
     sleepHandler.removeCallbacks(sleepRunnable)
+    scope.cancel()
     releaseResources()
     controller.release()
     session.isActive = false

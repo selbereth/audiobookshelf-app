@@ -17,6 +17,11 @@ export const state = () => ({
   /** Where the current chapter starts and ends in the book, 0-100 (both 0 when unknown) */
   chapterStart: 0,
   chapterEnd: 0,
+  /** The sentence being spoken, and how far the voice has got in it (characters). The text view scrolls by this. */
+  currentSentenceId: null,
+  wordStart: 0,
+  wordEnd: 0,
+  wordAt: 0, // when the voice reached the word (ms)
   /** Table of contents entries that map to a spine item: {id, title, spine, href} */
   chapters: [],
   currentChapterIndex: -1,
@@ -68,6 +73,8 @@ export const mutations = {
     state.currentChapterIndex = -1
     state.chapterStart = 0
     state.chapterEnd = 0
+    state.currentSentenceId = null
+    state.wordEnd = 0
   },
   clear(state) {
     state.active = false
@@ -80,6 +87,8 @@ export const mutations = {
     state.localLibraryItem = null
     state.chapters = []
     state.currentChapterIndex = -1
+    state.currentSentenceId = null
+    state.wordEnd = 0
     state.sleepRunning = false
     state.sleepAtChapterEnd = false
     state.sleepRemaining = 0
@@ -95,6 +104,18 @@ export const mutations = {
   },
   setCurrentChapterIndex(state, val) {
     state.currentChapterIndex = val
+  },
+  setCurrentSentence(state, id) {
+    state.currentSentenceId = id
+    state.wordStart = 0
+    state.wordEnd = 0
+    state.wordAt = Date.now()
+  },
+  setWord(state, { id, start, end }) {
+    if (id !== state.currentSentenceId) return
+    state.wordStart = start
+    state.wordEnd = end
+    state.wordAt = Date.now()
   },
   setChapterRange(state, { start, end }) {
     state.chapterStart = start

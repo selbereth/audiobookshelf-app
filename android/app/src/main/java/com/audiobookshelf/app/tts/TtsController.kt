@@ -26,10 +26,15 @@ class TtsController(private val context: Context) {
     fun onError(code: String, message: String)
     /** [remainingMs] 0 with running false = timer ended or cancelled */
     fun onSleepTimer(remainingMs: Long, running: Boolean, atChapterEnd: Boolean) {}
+    /** The engine is speaking characters [start, end) of sentence [id] (used to scroll the text along with the voice) */
+    fun onWord(id: Int, start: Int, end: Int) {}
   }
 
   private val tag = "TtsController"
+  /** Sentences handed to the engine ahead of the one being spoken */
   private val window = 12
+  /** Ask JS for more text when fewer than this many sentences are left to speak (about two chunks) */
+  private val lowWaterSentences = 100
   private val lock = Any()
 
   var listener: Listener? = null
@@ -41,9 +46,36 @@ class TtsController(private val context: Context) {
   var lang: String? = null
   var voiceId: String? = null
   /** Pause when the spoken sentence would leave this spine item (sleep timer: end of chapter) */
-  @Volatile var sleepSpine: Int? = null
+  @Volatile var sleepUntilSpine: Int? = null
 
   private val store = ArrayList<TtsSentence>()
+  // Where each sentence is in `store`, found without scanning it. Text added at the front moves every position
+  // by the same amount, so positions are kept relative to `shift` instead of being rewritten.
+  private val positions = HashMap<Int, Int>()
+  private var shift = 0
+
+  /** Must be called with lock held */
+  private fun indexOfId(id: Int): Int = positions[id]?.plus(shift) ?: -1
+
+  /** Must be called with lock held */
+  private fun appendToStore(sentences: List<TtsSentence>) {
+    sentences.forEachIndexed { i, s -> positions[s.id] = store.size + i - shift }
+    store.addAll(sentences)
+  }
+
+  /** Must be called with lock held */
+  private fun prependToStore(sentences: List<TtsSentence>) {
+    shift += sentences.size
+    sentences.forEachIndexed { i, s -> positions[s.id] = i - shift }
+    store.addAll(0, sentences)
+  }
+
+  /** Must be called with lock held */
+  private fun clearStore() {
+    store.clear()
+    positions.clear()
+    shift = 0
+  }
   private var cursor = 0          // index of the sentence currently speaking (or next to speak)
   private var nextToQueue = 0     // index of next sentence to hand to the engine
   private val queued = LinkedHashSet<Int>() // sentence ids in the engine queue
@@ -67,8 +99,13 @@ class TtsController(private val context: Context) {
   private val fakeQueue = ArrayDeque<TtsSentence>() // main thread only
   private var fakeSpeaking = false
 
+  /** Bumped by every stop: callbacks scheduled before it belong to speech that was cut off and do nothing */
+  @Volatile private var fakeGen = 0
+
   private fun fakeSpeak(s: TtsSentence) {
+    val gen = fakeGen
     fakeHandler.post {
+      if (gen != fakeGen) return@post
       fakeQueue.addLast(s)
       if (!fakeSpeaking) fakeNext()
     }
@@ -80,18 +117,27 @@ class TtsController(private val context: Context) {
       fakeSpeaking = false
       return
     }
+    val gen = fakeGen
     fakeSpeaking = true
     progressListener.onStart(s.id.toString())
     val ms = (s.text.length * 45 / rate).toLong().coerceAtLeast(400)
+    // Report each word at the time it would be spoken, like a real engine does
+    Regex("\\S+").findAll(s.text).forEach { word ->
+      fakeHandler.postDelayed({
+        if (gen == fakeGen) progressListener.onRangeStart(s.id.toString(), word.range.first, word.range.last + 1, 0)
+      }, ms * word.range.first / s.text.length)
+    }
     fakeHandler.postDelayed({
+      if (gen != fakeGen) return@postDelayed
       progressListener.onDone(s.id.toString())
       fakeNext()
     }, ms)
   }
 
   private fun fakeStop() {
+    // Not removeCallbacksAndMessages: that would also drop speech queued right after this stop
+    fakeGen++
     fakeHandler.post {
-      fakeHandler.removeCallbacksAndMessages(null)
       fakeQueue.clear()
       fakeSpeaking = false
     }
@@ -117,6 +163,14 @@ class TtsController(private val context: Context) {
     }
   }
 
+  /** `en`, `en-US` and the three letter `eng` are all used in EPUB metadata */
+  private fun localeFor(code: String): Locale {
+    val locale = Locale.forLanguageTag(code.replace('_', '-'))
+    if (locale.language.length != 3) return locale
+    val iso2 = Locale.getISOLanguages().firstOrNull { Locale.Builder().setLanguage(it).build().isO3Language == locale.language }
+    return if (iso2 != null) Locale.Builder().setLanguage(iso2).setRegion(locale.country).build() else locale
+  }
+
   private fun applyVoiceSettings() {
     val e = engine ?: return
     if (!engineReady) return // applied again from the init callback
@@ -126,7 +180,7 @@ class TtsController(private val context: Context) {
     if (v != null) {
       e.voice = v
     } else if (!lang.isNullOrBlank()) {
-      val result = e.setLanguage(Locale.forLanguageTag(lang!!))
+      val result = e.setLanguage(localeFor(lang!!))
       if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
         Log.e(tag, "setLanguage($lang) result=$result")
         if (!languageWarned) {
@@ -144,13 +198,21 @@ class TtsController(private val context: Context) {
       synchronized(lock) {
         // A callback for something that was flushed (skip, pause, seek) must not move the cursor back
         if (!queued.contains(id)) return
-        val idx = store.indexOfFirst { it.id == id }
+        val idx = indexOfId(id)
         if (idx >= 0) {
           cursor = idx
           sentence = store[idx]
         }
       }
       sentence?.let { listener?.onSentence(it) }
+    }
+
+    // Android 8+: called as the engine reaches each word
+    override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
+      val id = utteranceId?.toIntOrNull() ?: return
+      // Only for the sentence being spoken: a flushed one must not move the scroll
+      val current = synchronized(lock) { queued.contains(id) }
+      if (current) listener?.onWord(id, start, end)
     }
 
     override fun onDone(utteranceId: String?) {
@@ -160,11 +222,11 @@ class TtsController(private val context: Context) {
       var sleepNow = false
       synchronized(lock) {
         if (!queued.remove(id)) return // flushed/stale
-        val idx = store.indexOfFirst { it.id == id }
+        val idx = indexOfId(id)
         if (idx >= 0) cursor = minOf(idx + 1, store.size)
-        val sleepAt = sleepSpine
-        if (sleepAt != null && cursor < store.size && store[cursor].spine != sleepAt) {
-          sleepSpine = null
+        val sleepAt = sleepUntilSpine
+        if (sleepAt != null && cursor < store.size && store[cursor].spine >= sleepAt) {
+          sleepUntilSpine = null
           sleepNow = true
         }
         if (wantPlaying) refill()
@@ -175,7 +237,7 @@ class TtsController(private val context: Context) {
             playing = false
           }
         }
-        if (!streamDone && store.size - cursor < 2 * 50 && needMoreSentFor != lastSeq) {
+        if (!streamDone && store.size - cursor < lowWaterSentences && needMoreSentFor != lastSeq) {
           needMoreSentFor = lastSeq
           needMore = true
         }
@@ -231,10 +293,10 @@ class TtsController(private val context: Context) {
     synchronized(lock) {
       if (sid != streamId || seq <= lastSeq) return
       lastSeq = seq
-      store.addAll(sentences)
+      appendToStore(sentences)
       if (done) streamDone = true
       if (startId != null) {
-        val idx = store.indexOfFirst { it.id == startId }
+        val idx = indexOfId(startId)
         if (idx >= 0) {
           cursor = idx
           flushEngine()
@@ -254,9 +316,19 @@ class TtsController(private val context: Context) {
   fun prependChunk(sid: Int, sentences: List<TtsSentence>) {
     synchronized(lock) {
       if (sid != streamId || sentences.isEmpty()) return
-      store.addAll(0, sentences)
+      prependToStore(sentences)
       cursor += sentences.size
       nextToQueue += sentences.size
+    }
+  }
+
+  /** The sentence being spoken with [before] sentences before it and [after] after it, in reading order */
+  fun window(before: Int, after: Int): List<TtsSentence> {
+    synchronized(lock) {
+      if (store.isEmpty()) return emptyList()
+      val from = (cursor - before).coerceAtLeast(0)
+      val to = (cursor + after + 1).coerceAtMost(store.size)
+      return if (from < to) ArrayList(store.subList(from, to)) else emptyList()
     }
   }
 
@@ -318,7 +390,7 @@ class TtsController(private val context: Context) {
 
   fun seekToSentence(id: Int): Boolean {
     synchronized(lock) {
-      val idx = store.indexOfFirst { it.id == id }
+      val idx = indexOfId(id)
       if (idx < 0) return false
       cursor = idx
       flushEngine()
@@ -332,16 +404,16 @@ class TtsController(private val context: Context) {
   fun reset(newStreamId: Int) {
     synchronized(lock) {
       flushEngine()
-      store.clear()
+      clearStore()
       cursor = 0
       nextToQueue = 0
       streamId = newStreamId
       lastSeq = -1
       streamDone = false
       needMoreSentFor = -1
-      if (sleepSpine != null) {
+      if (sleepUntilSpine != null) {
         // The chapter it was set for may no longer be the one being read
-        sleepSpine = null
+        sleepUntilSpine = null
         listener?.onSleepTimer(0, false, false)
       }
     }
@@ -369,7 +441,7 @@ class TtsController(private val context: Context) {
     synchronized(lock) {
       wantPlaying = false
       playing = false
-      store.clear()
+      clearStore()
       queued.clear()
       cursor = 0
       nextToQueue = 0

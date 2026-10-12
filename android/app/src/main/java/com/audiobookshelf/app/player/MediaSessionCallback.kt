@@ -69,23 +69,35 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
     playerNotificationService.pause()
   }
 
+  /** While read aloud owns playback the transport buttons are for it, not for the (paused) audiobook */
+  private fun readAloudKey(keyCode: Int): Boolean {
+    val tts = com.audiobookshelf.app.tts.TtsService.instance ?: return false
+    tts.handleMediaKey(keyCode)
+    return true
+  }
+
   override fun onStop() {
+    if (readAloudKey(KeyEvent.KEYCODE_MEDIA_STOP)) return
     playerNotificationService.pause()
   }
 
   override fun onSkipToPrevious() {
+    if (readAloudKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)) return
     playerNotificationService.skipToPrevious()
   }
 
   override fun onSkipToNext() {
+    if (readAloudKey(KeyEvent.KEYCODE_MEDIA_NEXT)) return
     playerNotificationService.skipToNext()
   }
 
   override fun onFastForward() {
+    if (readAloudKey(KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)) return
     playerNotificationService.jumpForward()
   }
 
   override fun onRewind() {
+    if (readAloudKey(KeyEvent.KEYCODE_MEDIA_REWIND)) return
     playerNotificationService.jumpBackward()
   }
 

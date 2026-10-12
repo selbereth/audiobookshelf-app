@@ -168,6 +168,7 @@ export default {
           this.comicHasMetadata = false
           this.registerListeners()
           this.hideToolbar()
+          this.$showHideStatusBar(false)
         } else {
           this.unregisterListeners()
           this.$showHideStatusBar(true)
@@ -405,6 +406,10 @@ export default {
       if (touchTimeMs >= 1000) {
         return
       }
+      // In the ebook only a quick tap on the text shows or hides the toolbar: not a long press, a drag or a touch near the edges
+      if (this.isEpub && (touchTimeMs >= 500 || !this.isTouchInTextArea())) {
+        return
+      }
 
       const touchDistanceX = Math.abs(this.touchendX - this.touchstartX)
       const touchDistanceY = Math.abs(this.touchendY - this.touchstartY)
@@ -421,7 +426,8 @@ export default {
       if (touchDistanceX < 60 || touchDistanceY > touchDistanceX) {
         return
       }
-      this.hideToolbar()
+      // Turning the page of an ebook leaves the toolbar as it is (the other readers hide it)
+      if (!this.isEpub) this.hideToolbar()
       if (!this.isEpub) {
         if (this.touchendX < this.touchstartX) {
           this.next()
@@ -431,13 +437,23 @@ export default {
         }
       }
     },
+    /** The middle of the screen where the words are: the sides are for turning pages, the top and bottom for the toolbar and the status line */
+    isTouchInTextArea() {
+      const width = window.screen.width || window.innerWidth
+      const height = window.screen.height || window.innerHeight
+      const x = this.touchstartX / width
+      const y = this.touchstartY / height
+      return x > 0.2 && x < 0.8 && y > 0.12 && y < 0.88
+    },
+    // In the ebook the status bar is not shown with the toolbar: showing it moves the window's edge and the page
+    // would shift by the height of the bar every time the toolbar comes and goes. It stays hidden while the reader is open.
     showToolbar() {
       this.showingToolbar = true
-      this.$showHideStatusBar(true)
+      if (!this.isEpub) this.$showHideStatusBar(true)
     },
     hideToolbar() {
       this.showingToolbar = false
-      this.$showHideStatusBar(false)
+      if (!this.isEpub) this.$showHideStatusBar(false)
     },
     toggleToolbar() {
       if (this.showingToolbar) this.hideToolbar()
@@ -470,6 +486,10 @@ export default {
       this.touchendX = e.changedTouches[0].screenX
       this.touchendY = e.changedTouches[0].screenY
       this.handleGesture()
+    },
+    /** The system shows the status bar again when the app comes back from the recents screen: the ebook reader keeps it hidden */
+    onVisibilityChange() {
+      if (!document.hidden && this.show && this.isEpub) this.$showHideStatusBar(false)
     },
     closeEvt() {
       this.show = false
@@ -526,6 +546,7 @@ export default {
     },
     registerListeners() {
       this.$eventBus.$on('close-ebook', this.closeEvt)
+      document.addEventListener('visibilitychange', this.onVisibilityChange)
       document.body.addEventListener('touchstart', this.touchstart)
       document.body.addEventListener('touchend', this.touchend)
       this.initWatchVolume()
@@ -533,6 +554,7 @@ export default {
     },
     unregisterListeners() {
       this.$eventBus.$on('close-ebook', this.closeEvt)
+      document.removeEventListener('visibilitychange', this.onVisibilityChange)
       document.body.removeEventListener('touchstart', this.touchstart)
       document.body.removeEventListener('touchend', this.touchend)
       VolumeButtons.clearWatch().catch((error) => {
