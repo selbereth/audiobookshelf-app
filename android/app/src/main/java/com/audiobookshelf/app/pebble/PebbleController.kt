@@ -183,6 +183,13 @@ class PebbleController(private val context: Context) {
         }
       } else {
         val libraryItemId = last.libraryItemId ?: return error("Open Audiobookshelf on the phone")
+        // The app's screen sets the server connection when it starts; started from the watch there is no screen, so
+        // use the one the book was played from (or the last one used). Without it the request has no address.
+        if (DeviceManager.serverConnectionConfig == null) {
+          DeviceManager.serverConnectionConfig = DeviceManager.getServerConnectionConfig(last.serverConnectionConfigId)
+            ?: DeviceManager.getServerConnectionConfig(DeviceManager.deviceData.lastServerConnectionConfigId)
+        }
+        if (DeviceManager.serverConnectionConfig == null) return error("Log in to the server in the app first")
         val payload = service.getPlayItemRequestPayload(false)
         val session = suspendCancellableCoroutine<PlaybackSession?> { cont ->
           ApiHandler(context).playLibraryItem(libraryItemId, last.episodeId, payload) { if (cont.isActive) cont.resume(it) }
