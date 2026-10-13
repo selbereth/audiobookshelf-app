@@ -12,6 +12,11 @@
 
 <script>
 import ePub from 'epubjs'
+import ttsSession from '@/utils/tts/ttsSession'
+import { saveEbookProgress } from '@/utils/ebookProgress'
+
+/** The status bar and navigation bar showing or hiding changes the window height by less than this */
+const SYSTEM_BAR_CHANGE = 120
 
 export default {
   props: {
@@ -34,7 +39,17 @@ export default {
       currentLocationNum: 0,
       currentLocationCfi: null,
       inittingDisplay: true,
-      isRefreshingUI: false,
+      ttsHighlightCfi: null,
+      ttsHandler: null,
+      /** Turn the page to the sentence being read. Off after the listener turns the page themselves, until the sentence is on screen again */
+      ttsFollowAlong: true,
+      /** The size the book is laid out for. Laying it out again for a size it already has would move the page. */
+      appliedSize: null,
+      resizeTimer: null,
+      /** Where the reader is, set by the reader moving (not by the book being laid out again): the book is put back here after a resize */
+      readingCfi: null,
+      relayoutUntil: 0,
+      ttsIgnoreRelocatedUntil: 0, // page turns we made ourselves, and the ones that follow opening the book, are not the listener turning the page
       ereaderSettings: {
         theme: 'dark',
         font: 'serif',
@@ -47,6 +62,13 @@ export default {
   watch: {
     isPlayerOpen() {
       this.refreshUI()
+    },
+    /** Read aloud started (or was resumed after the app was reopened) while this reader is open: show what is being read */
+    ttsRunning(running) {
+      if (!running || this.inittingDisplay) return
+      this.ttsFollowAlong = true
+      this.attachTtsHandler()
+      this.syncTtsOnResume()
     }
   },
   computed: {
@@ -71,10 +93,22 @@ export default {
       return null
     },
     isPlayerOpen() {
-      return this.$store.getters['getIsPlayerOpen']
+      // The audiobook player or the read-aloud player is showing at the bottom
+      return this.$store.getters['getIsPlayerOpen'] || this.$store.state.tts.active
     },
     readerHeightOffset() {
       return this.isPlayerOpen ? 204 : 104
+    },
+    /** Native read aloud is running for this book */
+    ttsRunning() {
+      return this.ttsActive && !this.$store.state.tts.restored
+    },
+    /** Read-aloud is playing (or ready to be played, after the app was reopened) this book */
+    ttsActive() {
+      const tts = this.$store.state.tts
+      if (!tts.active) return false
+      // The downloaded copy and the server's copy of the same book have different ids
+      return tts.libraryItemId === this.libraryItemId || (!!tts.serverLibraryItemId && tts.serverLibraryItemId === this.serverLibraryItemId) || (!!tts.localLibraryItemId && tts.localLibraryItemId === this.localLibraryItemId)
     },
     /** @returns {Array<ePub.NavItem>} */
     chapters() {
@@ -126,6 +160,91 @@ export default {
     }
   },
   methods: {
+    /** ---- Text to speech: the session itself is global (utils/tts/ttsSession.js), the reader only highlights ---- */
+    async toggleTts() {
+      // Read from the top of the page being looked at, whether or not it is already reading this book: when it
+      // is, it moves to this page instead of starting again. (Pause and play are on the player.)
+      const startCfi = this.rendition?.currentLocation()?.start?.cfi || this.currentLocationCfi
+      if (this.ttsRunning && startCfi) {
+        this.ttsFollowAlong = true
+        this.ttsIgnoreRelocatedUntil = Date.now() + 1500
+        return ttsSession.readFrom(startCfi)
+      }
+      // Not reading this book yet, or a session restored after the app was closed that has nothing running
+      return this.startTts()
+    },
+    async startTts() {
+      if (!this.book || !this.rendition) return
+      const startCfi = this.rendition.currentLocation()?.start?.cfi || this.currentLocationCfi
+      // The session takes over the book so the text keeps being produced after the reader is closed
+      this.attachTtsHandler()
+      await ttsSession.start({
+        book: this.book,
+        bookFromReader: true,
+        startCfi,
+        meta: {
+          libraryItem: this.libraryItem,
+          localLibraryItem: this.localLibraryItem,
+          url: this.url,
+          isLocal: this.isLocal,
+          serverLibraryItemId: this.serverLibraryItemId,
+          localLibraryItemId: this.localLibraryItemId,
+          keepProgress: this.keepProgress,
+          progress: this.progress
+        }
+      })
+    },
+    attachTtsHandler() {
+      if (this.ttsHandler) return
+      this.ttsHandler = {
+        onSentence: (data) => this.onTtsSentence(data),
+        onStopped: () => this.clearTtsHighlight()
+      }
+      ttsSession.attachReader(this.ttsHandler)
+    },
+    clearTtsHighlight() {
+      if (this.ttsHighlightCfi) {
+        try {
+          this.rendition.annotations.remove(this.ttsHighlightCfi, 'highlight')
+        } catch (error) {
+          console.warn('[EpubReader] failed to remove highlight', error)
+        }
+        this.ttsHighlightCfi = null
+      }
+    },
+    onTtsSentence({ cfi }) {
+      if (!this.rendition || !cfi) return
+      this.clearTtsHighlight()
+      try {
+        this.rendition.annotations.highlight(cfi, {}, null, 'tts-highlight', { fill: 'yellow', 'fill-opacity': '0.35', 'mix-blend-mode': 'normal' })
+        this.ttsHighlightCfi = cfi
+      } catch (error) {
+        console.warn('[EpubReader] failed to highlight', error)
+      }
+      const loc = this.rendition.currentLocation()
+      if (loc?.start && loc?.end) {
+        const compare = new ePub.CFI()
+        const visible = compare.compare(cfi, loc.start.cfi) >= 0 && compare.compare(cfi, loc.end.cfi) <= 0
+        if (visible) {
+          this.ttsFollowAlong = true
+        } else if (this.ttsFollowAlong) {
+          this.ttsIgnoreRelocatedUntil = Date.now() + 1500
+          this.rendition.display(cfi)
+        }
+      }
+    },
+    /** Is the sentence being read on the page `location` (from epub.js's relocated event) */
+    isTtsSentenceVisible(location) {
+      const cfi = ttsSession.currentCfi
+      if (!cfi || !location?.start || !location?.end) return true
+      const compare = new ePub.CFI()
+      return compare.compare(cfi, location.start.cfi) >= 0 && compare.compare(cfi, location.end.cfi) <= 0
+    },
+    async syncTtsOnResume() {
+      if (!this.ttsActive) return
+      const state = await ttsSession.getState()
+      if (state.active && state.currentCfi) this.onTtsSentence({ cfi: state.currentCfi })
+    },
     updateSettings(settings) {
       this.ereaderSettings = settings
 
@@ -158,25 +277,7 @@ export default {
      */
     async updateProgress(payload) {
       if (!this.keepProgress) return
-
-      // Update local item
-      if (this.localLibraryItemId) {
-        const localPayload = {
-          localLibraryItemId: this.localLibraryItemId,
-          ...payload
-        }
-        const localResponse = await this.$db.updateLocalEbookProgress(localPayload)
-        if (localResponse.localMediaProgress) {
-          this.$store.commit('globals/updateLocalMediaProgress', localResponse.localMediaProgress)
-        }
-      }
-
-      // Update server item
-      if (this.serverLibraryItemId) {
-        this.$nativeHttp.patch(`/api/me/progress/${this.serverLibraryItemId}`, payload).catch((error) => {
-          console.error('EpubReader.updateProgress failed:', error)
-        })
-      }
+      await saveEbookProgress(this, { localLibraryItemId: this.localLibraryItemId, serverLibraryItemId: this.serverLibraryItemId }, payload)
     },
     getAllEbookLocationData() {
       const locations = []
@@ -266,11 +367,19 @@ export default {
     /** @param {string} location - CFI of the new location */
     relocated(location) {
       console.log(`[EpubReader] relocated ${location.start.cfi}`)
+      // A page turn the listener made while read aloud is running: stop pulling them back to the sentence being read
+      if (this.ttsRunning && !this.inittingDisplay && Date.now() > this.ttsIgnoreRelocatedUntil && !this.isTtsSentenceVisible(location)) {
+        // The listener moved to a page that does not have the sentence being read: stop pulling them back to it
+        this.ttsFollowAlong = false
+      }
       if (this.inittingDisplay) {
         console.log(`[EpubReader] relocated but initting display ${location.start.cfi}`)
         return
       }
       this.currentLocationNum = location.start.location
+      // A page shown because the book was laid out again at another size is not where the reader was: laying out
+      // again from it would move on from there every time the window changed size and came back
+      if (Date.now() > this.relayoutUntil) this.readingCfi = location.start.cfi
 
       if (this.currentLocationCfi === location.start.cfi) {
         console.log(`[EpubReader] location already saved`, location.start.cfi)
@@ -320,6 +429,7 @@ export default {
       })
 
       /** @type {ePub.Rendition} */
+      this.appliedSize = { width: window.innerWidth, height: window.innerHeight - this.readerHeightOffset }
       reader.rendition = reader.book.renderTo('viewer', {
         width: window.innerWidth,
         height: window.innerHeight - this.readerHeightOffset,
@@ -335,6 +445,9 @@ export default {
         if (this.savedEbookLocation && reader.book.spine.get(this.savedEbookLocation)) {
           displayCfi = this.savedEbookLocation
         }
+        // Read aloud is running for this book: open where it is reading now, not at the last saved position
+        const ttsCfi = this.ttsActive ? ttsSession.currentCfi : null
+        if (ttsCfi && reader.book.spine.get(ttsCfi)) displayCfi = ttsCfi
 
         reader.rendition.on('displayed', async () => {
           console.log('%c [EpubReader] Rendition displayed', 'color:blue;')
@@ -345,12 +458,15 @@ export default {
             let snapWidth = this.layout.pageWidth * this.layout.divisor
             return left % snapWidth !== 0
           }
+          this.installStickyPages()
         })
 
         reader.rendition.on('rendered', (section, view) => {
           this.applyTheme()
           console.log('%c [EpubReader] Rendition rendered', 'color:red;', section, view)
         })
+
+        reader.rendition.started.then(() => this.guardManagerResize())
 
         // set up event listeners
         reader.rendition.on('relocated', reader.relocated)
@@ -382,9 +498,18 @@ export default {
         // TODO: To get the correct page need to render twice. On book ready and after first display. Figure out why
         console.log(`[EpubReader] Displaying cfi ${displayCfi}`)
         this.currentLocationCfi = displayCfi
+        this.readingCfi = displayCfi
         reader.rendition.display(displayCfi).then(() => {
           reader.rendition.display(displayCfi).then(() => {
             this.inittingDisplay = false
+            // Read-aloud may already be running for this book (reader was closed and reopened)
+            if (this.ttsActive) {
+              this.ttsIgnoreRelocatedUntil = Date.now() + 1500
+              this.attachTtsHandler()
+              // Playing: the sentence being read. Only restored after the app was reopened: the one it stopped at
+              if (this.ttsRunning) this.syncTtsOnResume()
+              else if (ttsSession.currentCfi) this.onTtsSentence({ cfi: ttsSession.currentCfi })
+            }
           })
         })
       })
@@ -395,28 +520,176 @@ export default {
         c.addStylesheetRules(this.themeRules)
       })
     },
-    async screenOrientationChange() {
-      if (this.isRefreshingUI) return
-      this.isRefreshingUI = true
-      const windowWidth = window.innerWidth
-      this.refreshUI()
+    screenOrientationChange() {
+      this.scheduleResize()
+    },
+    onVisibilityChange() {
+      // Coming back from the recents screen the window passes through a few sizes: wait for the final one
+      if (!document.hidden) {
+        this.scheduleResize()
+        this.syncTtsOnResume()
+      }
+    },
+    /** The window changed size. It may change again straight away (the status bar, the recents screen), so wait for it to settle. */
+    /**
+     * Pages are sticky: a swipe turns exactly one page, whatever the speed or length, and the book always comes to
+     * rest on a whole page. epub.js's own snapping adds a page to wherever the drag has already got to (a long drag turns
+     * two) and gives up when a new touch starts while it is settling (which leaves the book between two pages).
+     */
+    installStickyPages() {
+      const snap = this.rendition?.manager?.snapper
+      if (!snap || snap.sticky || !snap.supportsTouch) return
+      snap.sticky = true
+      const MIN_DISTANCE = 40 // px of finger movement that turns the page
+      const MIN_VELOCITY = 0.25 // px/ms: a short flick turns it too
+      const DURATION = 220
+      const pageWidth = () => snap.manager.layout.pageWidth * snap.manager.layout.divisor
+      const position = () => (snap.fullsize ? window.scrollX : snap.scroller.scrollLeft)
+      const ease = (t) => 1 - Math.pow(1 - t, 3)
+      snap.touching = false
+      snap.animFrame = null
+      snap.targetLeft = null
+      snap.startPage = null
 
-      // Window width does not always change right away. Wait up to 250ms for a change.
-      // iPhone 10 on iOS 16 took between 100 - 200ms to update when going from portrait to landscape
-      //   but landscape to portrait was immediate
-      for (let i = 0; i < 5; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 50))
-        if (window.innerWidth !== windowWidth) {
-          this.refreshUI()
-          break
+      // Settles at once where the page was heading (a new touch has started while it was turning)
+      snap.finishAnimation = function () {
+        if (this.animFrame === null) return
+        cancelAnimationFrame(this.animFrame)
+        this.animFrame = null
+        this.scrollTo(this.targetLeft, 0)
+        this.snapping = false
+      }
+      snap.animateTo = function (left) {
+        if (this.animFrame !== null) cancelAnimationFrame(this.animFrame)
+        this.animFrame = null
+        const from = position()
+        this.targetLeft = left
+        if (Math.abs(left - from) < 1) {
+          this.scrollTo(left, 0)
+          this.snapping = false
+          return
         }
+        this.snapping = true
+        const started = this.now()
+        const tick = () => {
+          const t = Math.min(1, (this.now() - started) / DURATION)
+          this.scrollTo(from + (left - from) * ease(t), 0)
+          if (t < 1) {
+            this.animFrame = requestAnimationFrame(tick)
+          } else {
+            this.animFrame = null
+            this.snapping = false
+          }
+        }
+        tick()
       }
 
-      this.isRefreshingUI = false
+      snap.onTouchStart = function (e) {
+        const { screenX, screenY } = e.touches[0]
+        this.finishAnimation()
+        this.touching = true
+        if (this.startTouchX === undefined) {
+          this.startTouchX = screenX
+          this.startTouchY = screenY
+          this.startTime = this.now()
+          // The page this touch started on: it can turn to the next or the previous one and no further
+          this.startPage = Math.round(position() / pageWidth())
+        }
+        this.endTouchX = screenX
+        this.endTouchY = screenY
+        this.endTime = this.now()
+      }
+
+      snap.onTouchMove = function (e) {
+        const { screenX, screenY } = e.touches[0]
+        if (!this.fullsize && Math.abs(screenY - this.endTouchY) < 10 && this.startPage !== null) {
+          // The page follows the finger, but never further than one page from where it started
+          const width = pageWidth()
+          const left = this.element.scrollLeft - (screenX - this.endTouchX)
+          this.element.scrollLeft = Math.min((this.startPage + 1) * width, Math.max((this.startPage - 1) * width, left))
+        }
+        this.endTouchX = screenX
+        this.endTouchY = screenY
+        this.endTime = this.now()
+      }
+
+      snap.onTouchEnd = function () {
+        this.touching = false
+        const width = pageWidth()
+        const startPage = this.startPage !== null ? this.startPage : Math.round(position() / width)
+        let page = startPage
+        if (this.startTouchX !== undefined) {
+          const distance = this.endTouchX - this.startTouchX
+          const sideways = Math.abs(distance) > Math.abs(this.endTouchY - this.startTouchY)
+          const velocity = distance / Math.max(1, this.endTime - this.startTime)
+          if (sideways && (Math.abs(distance) >= MIN_DISTANCE || (Math.abs(distance) > 10 && Math.abs(velocity) > MIN_VELOCITY))) {
+            page += distance < 0 ? 1 : -1
+          }
+        }
+        this.animateTo(Math.max(0, page * width))
+        this.startTouchX = this.startTouchY = this.startTime = undefined
+        this.endTouchX = this.endTouchY = this.endTime = undefined
+        this.startPage = null
+      }
+
+      snap.onScroll = function () {
+        this.scrollLeft = position()
+        this.scrollTop = this.fullsize ? window.scrollY : this.scroller.scrollTop
+        // Whatever moved the book (a cancelled touch, the keyboard, a resize), it does not stay between two pages
+        clearTimeout(this.settleTimer)
+        this.settleTimer = setTimeout(() => {
+          if (this.touching || this.animFrame !== null) return
+          const width = pageWidth()
+          const left = position()
+          const nearest = Math.max(0, Math.round(left / width) * width)
+          if (Math.abs(left - nearest) > 1.5) this.animateTo(nearest)
+        }, 160)
+      }
+
+      // The handlers are bound when the listeners are added: add them again so these are the ones used
+      snap.removeListeners()
+      snap.addListeners()
     },
-    refreshUI() {
-      if (this.rendition?.resize) {
-        this.rendition.resize(window.innerWidth, window.innerHeight - this.readerHeightOffset)
+    /**
+     * epub.js listens for window resizes itself, reads the size from the page (which follows the window, status bar
+     * and all) and lays the book out again at once: at every size the window passes through. Its own calls are turned
+     * into a scheduled check instead, and only `refreshUI` lays the book out, and only for a size it does not have yet.
+     */
+    guardManagerResize() {
+      const manager = this.rendition?.manager
+      if (!manager || manager.guarded) return
+      const resize = manager.resize.bind(manager)
+      manager.guarded = true
+      manager.resize = (width, height, epubcfi) => {
+        if (width === undefined && height === undefined && !this.applyingSize) {
+          this.scheduleResize()
+          return
+        }
+        return resize(width, height, epubcfi)
+      }
+    },
+    scheduleResize() {
+      clearTimeout(this.resizeTimer)
+      this.resizeTimer = setTimeout(() => this.refreshUI({ fromWindow: true }), 350)
+    },
+    refreshUI({ fromWindow = false } = {}) {
+      // epub.js only creates the manager once the book has opened: a resize before that has nothing to resize
+      if (!this.rendition?.manager || document.hidden) return
+      const size = { width: window.innerWidth, height: window.innerHeight - this.readerHeightOffset }
+      // The window got a little taller or shorter (the status bar and the navigation bar come and go, the recents screen
+      // shows them): the layout is kept. The book is laid out in columns from its top, so laying it out for a new height
+      // flows all of it again and moves the page; kept as it is, only the bottom edge is covered or uncovered.
+      if (fromWindow && this.appliedSize && size.width === this.appliedSize.width && Math.abs(size.height - this.appliedSize.height) <= SYSTEM_BAR_CHANGE) return
+      // The same size again: laying the book out again moves the page (the first line of a page can fall onto the one before)
+      if (this.appliedSize && this.appliedSize.width === size.width && this.appliedSize.height === size.height) return
+      this.appliedSize = size
+      this.applyingSize = true
+      this.relayoutUntil = Date.now() + 1500
+      try {
+        // Re-anchor on where the reader was, so that coming back to the first size shows the first page again
+        this.rendition.resize(size.width, size.height, this.readingCfi || undefined)
+      } finally {
+        this.applyingSize = false
       }
     }
   },
@@ -430,9 +703,16 @@ export default {
       document.addEventListener('orientationchange', this.screenOrientationChange)
     }
     window.addEventListener('resize', this.screenOrientationChange)
+    document.addEventListener('visibilitychange', this.onVisibilityChange)
   },
   beforeDestroy() {
-    this.book?.destroy()
+    clearTimeout(this.resizeTimer)
+    // Read-aloud keeps playing after the reader is closed: the session owns the book
+    if (this.ttsHandler) ttsSession.detachReader(this.ttsHandler)
+    // Only the views are torn down: rendition.destroy() would clear rendition.book which epub.js hooks still use while the session reads
+    // (A restored session has not opened a book: nothing else uses this one)
+    if (this.ttsActive && !this.$store.state.tts.restored) this.rendition?.manager?.destroy()
+    else this.book?.destroy()
 
     if (screen.orientation) {
       // Not available on ios
@@ -441,6 +721,7 @@ export default {
       document.removeEventListener('orientationchange', this.screenOrientationChange)
     }
     window.removeEventListener('resize', this.screenOrientationChange)
+    document.removeEventListener('visibilitychange', this.onVisibilityChange)
   }
 }
 </script>

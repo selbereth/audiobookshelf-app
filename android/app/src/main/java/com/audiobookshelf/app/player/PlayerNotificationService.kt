@@ -425,6 +425,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           playWhenReady: Boolean,
           playbackRate: Float?
   ) {
+    com.audiobookshelf.app.tts.TtsService.requestStop()
     if (!isStarted) {
       Log.i(tag, "preparePlayer: foreground service not started - Starting service --")
       Intent(ctx, PlayerNotificationService::class.java).also { intent ->
@@ -948,6 +949,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   }
 
   fun play() {
+    // Only one thing owns media playback
+    com.audiobookshelf.app.tts.TtsService.requestStop()
     if (currentPlayer.isPlaying) {
       Log.d(tag, "Already playing")
       return

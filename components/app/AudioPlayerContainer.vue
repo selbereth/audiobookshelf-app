@@ -1,9 +1,9 @@
 <template>
   <div>
-    <app-audio-player ref="audioPlayer" :bookmarks="bookmarks" :sleep-timer-running="isSleepTimerRunning" :sleep-time-remaining="sleepTimeRemaining" :serverLibraryItemId="serverLibraryItemId" @selectPlaybackSpeed="showPlaybackSpeedModal = true" @updateTime="(t) => (currentTime = t)" @showSleepTimer="showSleepTimer" @showBookmarks="showBookmarks" />
+    <app-audio-player ref="audioPlayer" :bookmarks="bookmarks" :sleep-timer-running="sleepRunning" :sleep-time-remaining="sleepRemaining" :serverLibraryItemId="serverLibraryItemId" @selectPlaybackSpeed="openPlaybackSpeed" @updateTime="(t) => (currentTime = t)" @showSleepTimer="showSleepTimer" @showBookmarks="showBookmarks" />
 
     <modals-playback-speed-modal v-model="showPlaybackSpeedModal" :playback-rate.sync="playbackSpeed" @update:playbackRate="updatePlaybackSpeed" @change="changePlaybackSpeed" />
-    <modals-sleep-timer-modal v-model="showSleepTimerModal" :current-time="sleepTimeRemaining" :sleep-timer-running="isSleepTimerRunning" :current-end-of-chapter-time="currentEndOfChapterTime" :is-auto="isAutoSleepTimer" @change="selectSleepTimeout" @cancel="cancelSleepTimer" @increase="increaseSleepTimer" @decrease="decreaseSleepTimer" />
+    <modals-sleep-timer-modal v-model="showSleepTimerModal" :current-time="sleepRemaining" :sleep-timer-running="sleepRunning" :current-end-of-chapter-time="currentEndOfChapterTime" :is-auto="isAutoSleepTimer && !isTts" @change="selectSleepTimeout" @cancel="cancelSleepTimer" @increase="increaseSleepTimer" @decrease="decreaseSleepTimer" />
     <modals-bookmarks-modal v-model="showBookmarksModal" :bookmarks="bookmarks" :current-time="currentTime" :library-item-id="serverLibraryItemId" :playback-rate="playbackSpeed" @select="selectBookmark" />
   </div>
 </template>
@@ -12,6 +12,7 @@
 import { AbsAudioPlayer, AbsLogger } from '@/plugins/capacitor'
 import { Dialog } from '@capacitor/dialog'
 import CellularPermissionHelpers from '@/mixins/cellularPermissionHelpers'
+import ttsSession from '@/utils/tts/ttsSession'
 
 export default {
   data() {
@@ -51,6 +52,16 @@ export default {
     },
     currentPlaybackSession() {
       return this.$store.state.currentPlaybackSession
+    },
+    /** EPUB read-aloud is using the player: speed and sleep timer apply to it */
+    isTts() {
+      return this.$store.state.tts.active
+    },
+    sleepRunning() {
+      return this.isTts ? this.$store.state.tts.sleepRunning : this.isSleepTimerRunning
+    },
+    sleepRemaining() {
+      return this.isTts ? this.$store.state.tts.sleepRemaining : this.sleepTimeRemaining
     }
   },
   methods: {
@@ -84,8 +95,15 @@ export default {
       this.isAutoSleepTimer = !!isAuto
       this.sleepTimeRemaining = sleepTimeRemaining
     },
+    openPlaybackSpeed() {
+      this.playbackSpeed = this.isTts ? this.$store.state.tts.rate : this.$store.getters['user/getUserSetting']('playbackRate')
+      this.showPlaybackSpeedModal = true
+    },
     showSleepTimer() {
-      if (this.$refs.audioPlayer && this.$refs.audioPlayer.currentChapter) {
+      if (this.isTts) {
+        // Read aloud sleeps at the end of the current chapter (spine item); only offered when the book has chapters
+        this.currentEndOfChapterTime = this.$store.state.tts.chapters.length ? 1 : 0
+      } else if (this.$refs.audioPlayer && this.$refs.audioPlayer.currentChapter) {
         this.currentEndOfChapterTime = Math.floor(this.$refs.audioPlayer.currentChapter.end)
       } else {
         this.currentEndOfChapterTime = 0
@@ -94,6 +112,7 @@ export default {
     },
     async selectSleepTimeout({ time, isChapterTime }) {
       console.log('Setting sleep timer', time, isChapterTime)
+      if (this.isTts) return ttsSession.setSleepTimer({ ms: time, isChapterTime })
       var res = await AbsAudioPlayer.setSleepTimer({ time: String(time), isChapterTime })
       if (!res.success) {
         return this.$toast.error('Sleep timer did not set, invalid time')
@@ -101,13 +120,16 @@ export default {
     },
     increaseSleepTimer() {
       // Default time to increase = 5 min
+      if (this.isTts) return ttsSession.adjustSleepTimer(300000)
       AbsAudioPlayer.increaseSleepTime({ time: '300000' })
     },
     decreaseSleepTimer() {
+      if (this.isTts) return ttsSession.adjustSleepTimer(-300000)
       AbsAudioPlayer.decreaseSleepTime({ time: '300000' })
     },
     async cancelSleepTimer() {
       console.log('Canceling sleep timer')
+      if (this.isTts) return ttsSession.cancelSleepTimer()
       await AbsAudioPlayer.cancelSleepTimer()
     },
     streamClosed() {
@@ -141,13 +163,16 @@ export default {
       }
     },
     changePlaybackSpeed(speed) {
+      // Read aloud has its own speed (saved by the session), the audiobook speed is a user setting
+      if (this.isTts) return
       console.log(`[AudioPlayerContainer] Change Playback Speed: ${speed}`)
       this.$store.dispatch('user/updateUserSettings', { playbackRate: speed })
     },
     settingsUpdated(settings) {
       console.log(`[AudioPlayerContainer] Settings Update | PlaybackRate: ${settings.playbackRate}`)
       this.playbackSpeed = settings.playbackRate
-      if (this.$refs.audioPlayer && this.$refs.audioPlayer.currentPlaybackRate !== settings.playbackRate) {
+      // The audiobook speed setting does not apply to read aloud
+      if (!this.isTts && this.$refs.audioPlayer && this.$refs.audioPlayer.currentPlaybackRate !== settings.playbackRate) {
         console.log(`[AudioPlayerContainer] PlaybackRate Updated: ${this.playbackSpeed}`)
         this.$refs.audioPlayer.setPlaybackSpeed(this.playbackSpeed)
       }

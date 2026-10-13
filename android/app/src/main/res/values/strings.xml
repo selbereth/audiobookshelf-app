@@ -11,4 +11,9 @@
     <string name="action_skip_forward">Skip Forward</string>
     <string name="action_skip_backward">Skip Backward</string>
     <string name="action_change_speed">Change Playback Speed</string>
+    <string name="tts_channel_name">Read aloud</string>
+    <string name="tts_action_previous">Previous sentence</string>
+    <string name="tts_action_play">Play</string>
+    <string name="tts_action_pause">Pause</string>
+    <string name="tts_action_next">Next sentence</string>
 </resources>

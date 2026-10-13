@@ -1,7 +1,7 @@
 <template>
   <div class="w-full layout-wrapper bg-bg">
     <app-appbar />
-    <div id="content" class="overflow-hidden relative" :class="isPlayerOpen ? 'playerOpen' : ''">
+    <div id="content" class="overflow-hidden relative" :class="isPlayerOpen || isTtsActive ? 'playerOpen' : ''">
       <Nuxt :key="currentLang" />
     </div>
     <app-audio-player-container ref="streamContainer" />
@@ -15,6 +15,7 @@
 </template>
 
 <script>
+import ttsSession from '@/utils/tts/ttsSession'
 import { CapacitorHttp } from '@capacitor/core'
 import { AbsLogger } from '@/plugins/capacitor'
 
@@ -30,6 +31,12 @@ export default {
     }
   },
   watch: {
+    signedInUser(val, oldVal) {
+      // Logging out (or switching user) ends read aloud: the book and its progress belong to the previous user
+      if (this.$store.state.tts.active && oldVal && (!val || val.id !== oldVal.id)) ttsSession.stop()
+      // A session restored when the app started may belong to a different user than the one who just signed in
+      else if (val && !oldVal) ttsSession.checkRestoredOwner()
+    },
     networkConnected: {
       handler(newVal, oldVal) {
         if (!this.hasMounted) {
@@ -81,6 +88,13 @@ export default {
     }
   },
   computed: {
+    isTtsActive() {
+      return this.$store.state.tts.active
+    },
+    /** Signed in user, for ending read aloud on logout */
+    signedInUser() {
+      return this.$store.state.user.user
+    },
     isPlayerOpen() {
       return this.$store.getters['getIsPlayerOpen']
     },
@@ -112,6 +126,16 @@ export default {
     }
   },
   methods: {
+    /** audiobookshelf://item/<libraryItemId> opens that item's page (other links, like the login one, are handled elsewhere) */
+    onUrlOpen(url) {
+      try {
+        const link = new URL(url)
+        const id = link.hostname === 'item' ? link.pathname.replace(/^\//, '') : ''
+        if (id && /^[\w-]+$/.test(id)) this.$router.push(`/item/${id}`)
+      } catch (error) {
+        console.warn('[default] failed to handle url', url, error)
+      }
+    },
     initialStream(stream) {
       if (this.$refs.streamContainer?.audioPlayerReady) {
         this.$refs.streamContainer.streamOpen(stream)
@@ -349,6 +373,10 @@ export default {
     }
   },
   async mounted() {
+    this.$eventBus.$on('url-open', this.onUrlOpen)
+    ttsSession.init(this.$store, this.$toast, this)
+    // Read-aloud that was in use when the app was closed is shown again, paused, where it was
+    ttsSession.restore()
     this.$eventBus.$on('change-lang', this.changeLanguage)
     document.addEventListener('visibilitychange', this.visibilityChanged)
 
@@ -385,6 +413,7 @@ export default {
     }
   },
   beforeDestroy() {
+    this.$eventBus.$off('url-open', this.onUrlOpen)
     this.$eventBus.$off('change-lang', this.changeLanguage)
     document.removeEventListener('visibilitychange', this.visibilityChanged)
     this.$socket.off('user_updated', this.userUpdated)

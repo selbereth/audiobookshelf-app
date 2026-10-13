@@ -101,6 +101,12 @@
         </service>
 
         <service
+            android:name=".tts.TtsService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <service
             android:name=".services.DownloadService"
             android:enabled="true"
             android:exported="false"
