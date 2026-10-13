@@ -29,7 +29,7 @@ Everything below runs from the shell. Android Studio is not needed.
 # 1. Web part: builds the Nuxt app and copies it into android/ and ios/ (about 3 s when nothing changed)
 npm run sync
 
-# 2. Android debug APK (package com.audiobookshelf.app.debug, activity com.audiobookshelf.app.MainActivity)
+# 2. Android debug APK (package com.selbereth.audiobookshelf.debug, activity com.audiobookshelf.app.MainActivity)
 cd android
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=~/Library/Android/sdk
 ./gradlew :app:assembleDebug        # app/build/outputs/apk/debug/app-debug.apk
@@ -38,7 +38,7 @@ export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home 
 A=$ANDROID_HOME/platform-tools/adb
 $A devices -l                        # emulator-5554 and the Pixel (USB serial, or a Wi-Fi debugging name)
 $A -s <device> install -r app/build/outputs/apk/debug/app-debug.apk
-$A -s <device> shell am start -n com.audiobookshelf.app.debug/com.audiobookshelf.app.MainActivity
+$A -s <device> shell am start -n com.selbereth.audiobookshelf.debug/com.audiobookshelf.app.MainActivity
 ```
 
 - Capacitor needs **JDK 21**. The system default is JDK 25 (Gradle 8.11 cannot run on it) and `~/.gradle/jdks` only has 17
@@ -163,10 +163,10 @@ export PATH="$ANDROID_HOME/platform-tools:$PATH"; pebble install --adb      # in
   not let the agent send keystrokes (Apple events are not authorized). A temporary test build that sends its own command sequence
   from a timer worked (remove it afterwards).
 - The watch's action bar icons are white shapes on transparent: black ones are invisible on the bar.
-- Try the phone side without a watch (debug builds): `adb shell am broadcast -n com.audiobookshelf.app.debug/com.audiobookshelf.app.pebble.PebbleDebugReceiver --ei command <0|1|2|3>`
+- Try the phone side without a watch (debug builds): `adb shell am broadcast -n com.selbereth.audiobookshelf.debug/com.audiobookshelf.app.pebble.PebbleDebugReceiver --ei command <0|1|2|3>`
   (0 status, 1 play or pause and start the most recent book, 2 skip ahead, 3 skip back, 4 volume up, 5 volume down) and read logcat tag `PebbleDebug`.
   Starting from a stopped app only works after
-  `adb shell dumpsys deviceidle whitelist +com.audiobookshelf.app.debug` (the same as setting battery usage to Unrestricted).
+  `adb shell dumpsys deviceidle whitelist +com.selbereth.audiobookshelf.debug` (the same as setting battery usage to Unrestricted).
 - A sibling project, `~/projects/find-pebble`, is a find-my-phone Pebble app. It uses the classic PebbleKit broadcast and is a useful
   reference for the Core Devices app's behaviour (vault note `find-pebble`).
 

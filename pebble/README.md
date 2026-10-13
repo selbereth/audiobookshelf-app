@@ -41,7 +41,7 @@ pebble install --phone <phone-ip>             # install on the watch through the
 Try the watchapp in the emulator (needs `qemu-pebble`, see the repository's `AGENTS.md`): `pebble install --emulator emery`, then act as the phone with
 `pebble send-app-message --emulator emery --uint 1=2 --string 2="A title"` (State 0 nothing, 1 paused, 2 playing, 3 starting, 4 error).
 
-Try the phone side without a watch (debug builds only, from adb): `adb shell am broadcast -n com.audiobookshelf.app.debug/com.audiobookshelf.app.pebble.PebbleDebugReceiver --ei command 1`
+Try the phone side without a watch (debug builds only, from adb): `adb shell am broadcast -n com.selbereth.audiobookshelf.debug/com.audiobookshelf.app.pebble.PebbleDebugReceiver --ei command 1`
 where command is 0 status, 1 play or pause (starts the most recent book), 2 skip ahead, 3 skip back, 4 volume up, 5 volume down. The answer is in
 logcat under `PebbleDebug`.
 

@@ -26,10 +26,10 @@
     },
     "companionApp": {
       "android": {
-        "url": "https://github.com/advplyr/audiobookshelf-app",
+        "url": "https://github.com/selbereth/audiobookshelf-app",
         "apps": [
-          { "package": "com.audiobookshelf.app.debug" },
-          { "package": "com.audiobookshelf.app" }
+          { "package": "com.selbereth.audiobookshelf.debug" },
+          { "package": "com.selbereth.audiobookshelf" }
         ]
       }
     },
