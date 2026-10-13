@@ -6,7 +6,7 @@
   "private": true,
   "dependencies": {},
   "pebble": {
-    "displayName": "Audiobookshelf",
+    "displayName": "Selbershelf",
     "uuid": "481b78c4-0301-4950-af0b-dd24992f6602",
     "sdkVersion": "3",
     "enableMultiJS": false,

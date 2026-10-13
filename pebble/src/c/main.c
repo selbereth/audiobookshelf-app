@@ -1,4 +1,4 @@
-// Audiobookshelf for Pebble: start the book played most recently, pause it, skip ahead and back.
+// Selbershelf for Pebble: start the book played most recently, pause it, skip ahead and back.
 //
 // The watch only sends commands and shows what the phone says is playing. The phone side is
 // android/app/src/main/java/com/audiobookshelf/app/pebble/. The command and state numbers below must match
@@ -94,7 +94,7 @@ static void update_ui(int state) {
     case STATE_NOTHING_TO_PLAY:
     default:
       status = "Nothing to play";
-      snprintf(s_title, sizeof(s_title), "Play a book in Audiobookshelf on the phone first");
+      snprintf(s_title, sizeof(s_title), "Play a book in Selbershelf on the phone first");
       break;
   }
 
@@ -110,7 +110,7 @@ static void update_ui(int state) {
 static void show_no_answer(void *data) {
   s_answer_timer = NULL;
   snprintf(s_status, sizeof(s_status), "No answer");
-  snprintf(s_title, sizeof(s_title), "Is the Pebble app connected and Audiobookshelf installed?");
+  snprintf(s_title, sizeof(s_title), "Is the Pebble app connected and Selbershelf installed?");
   text_layer_set_text(s_status_layer, s_status);
   text_layer_set_text(s_title_layer, s_title);
 }

@@ -1,4 +1,4 @@
-# Audiobookshelf for Pebble
+# Selbershelf for Pebble
 
 A small watchapp that controls the Audiobookshelf Android app: start the book played most recently, play and
 pause it, skip ahead and back.
