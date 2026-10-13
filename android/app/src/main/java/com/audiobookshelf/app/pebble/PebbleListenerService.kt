@@ -24,6 +24,7 @@ class PebbleListenerService : BasePebbleListenerService() {
   private lateinit var sender: DefaultPebbleSender
   private var lastStatusSentAt = 0L
   private var watcher: Job? = null
+  @Volatile private var starting = false // a start from the watch is under way: the player reports paused until it plays
 
   override fun onCreate() {
     super.onCreate()
@@ -64,7 +65,7 @@ class PebbleListenerService : BasePebbleListenerService() {
           continue
         }
         // A command from the watch is answered by its own message; LOADING is followed by waitUntilPlaying
-        if (status.state == PebbleProtocol.STATE_LOADING) continue
+        if (status.state == PebbleProtocol.STATE_LOADING || starting) continue
         val progress = kotlin.math.abs(status.positionSeconds - before.positionSeconds) >= PROGRESS_STEP_SECONDS
         if (status.state != before.state || status.title != before.title || status.chapter != before.chapter || progress) {
           last = status
@@ -93,8 +94,13 @@ class PebbleListenerService : BasePebbleListenerService() {
       // The status was just sent when the app opened: the watch's own hello needs no second copy (it would refuse it)
       if (command == PebbleProtocol.CMD_HELLO && System.currentTimeMillis() - lastStatusSentAt < 2000) return@launch
       val status = controller.handle(command)
-      sendStatus(status, watch)
-      if (status.state == PebbleProtocol.STATE_LOADING) sendStatus(controller.waitUntilPlaying(), watch)
+      if (status.state == PebbleProtocol.STATE_LOADING) starting = true
+      try {
+        sendStatus(status, watch)
+        if (status.state == PebbleProtocol.STATE_LOADING) sendStatus(controller.waitUntilPlaying(), watch)
+      } finally {
+        starting = false
+      }
     }
     return ReceiveResult.Ack
   }
