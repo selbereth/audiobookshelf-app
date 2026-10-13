@@ -28,6 +28,10 @@
 #define ANSWER_TIMEOUT_MS 4000
 #define LONG_PRESS_MS 500          // a button held this long changes the volume instead of skipping
 #define VOLUME_REPEAT_MS 400       // while it stays held, one more step this often
+#define SPINNER_FRAMES 8
+#define SPINNER_MS 90              // the spinner turns one step this often while a book is starting
+#define START_ANSWER_MS 15000     // the server can take a few seconds to answer when a book is started
+#define START_WAIT_MS 30000        // longest the spinner stays up after the phone says it is starting
 #define MAX_TITLE 64
 #define MAX_CHAPTER 72
 
@@ -46,6 +50,10 @@ static GBitmap *s_icon_plus;
 static GBitmap *s_icon_minus;
 static AppTimer *s_answer_timer;
 static AppTimer *s_volume_timer;
+static AppTimer *s_spinner_timer;
+static GBitmap *s_spinner[SPINNER_FRAMES];
+static int s_spinner_frame;
+static int s_state = STATE_PAUSED;
 static uint8_t s_volume_command;
 
 static uint32_t s_position;   // seconds into the book
@@ -73,7 +81,31 @@ static void progress_update_proc(Layer *layer, GContext *ctx) {
   }
 }
 
+static void spinner_step(void *data) {
+  s_spinner_timer = NULL;
+  s_spinner_frame = (s_spinner_frame + 1) % SPINNER_FRAMES;
+  action_bar_layer_set_icon(s_action_bar, BUTTON_ID_SELECT, s_spinner[s_spinner_frame]);
+  s_spinner_timer = app_timer_register(SPINNER_MS, spinner_step, NULL);
+}
+
+static void spinner_start(void) {
+  if (s_spinner_timer) {
+    return;
+  }
+  s_spinner_frame = 0;
+  action_bar_layer_set_icon(s_action_bar, BUTTON_ID_SELECT, s_spinner[0]);
+  s_spinner_timer = app_timer_register(SPINNER_MS, spinner_step, NULL);
+}
+
+static void spinner_stop(void) {
+  if (s_spinner_timer) {
+    app_timer_cancel(s_spinner_timer);
+    s_spinner_timer = NULL;
+  }
+}
+
 static void update_ui(int state) {
+  s_state = state;
   const char *status = "";
   GBitmap *select_icon = s_icon_play;
 
@@ -104,11 +136,18 @@ static void update_ui(int state) {
   text_layer_set_text(s_chapter_layer, s_chapter);
   text_layer_set_text(s_time_layer, s_time);
   layer_mark_dirty(s_progress_layer);
-  action_bar_layer_set_icon(s_action_bar, BUTTON_ID_SELECT, select_icon);
+  if (state == STATE_LOADING) {
+    spinner_start();
+  } else {
+    spinner_stop();
+    action_bar_layer_set_icon(s_action_bar, BUTTON_ID_SELECT, select_icon);
+  }
 }
 
 static void show_no_answer(void *data) {
   s_answer_timer = NULL;
+  spinner_stop();
+  action_bar_layer_set_icon(s_action_bar, BUTTON_ID_SELECT, s_icon_play);
   snprintf(s_status, sizeof(s_status), "No answer");
   snprintf(s_title, sizeof(s_title), "Is the Pebble app connected and Selbershelf installed?");
   text_layer_set_text(s_status_layer, s_status);
@@ -116,7 +155,7 @@ static void show_no_answer(void *data) {
 }
 
 // Sends a command and waits a few seconds for the phone to answer with what is playing
-static void send_command(uint8_t command) {
+static void send_command_with_timeout(uint8_t command, uint32_t timeout_ms) {
   APP_LOG(APP_LOG_LEVEL_INFO, "Sending command %d", (int)command);
   DictionaryIterator *iter;
   if (app_message_outbox_begin(&iter) != APP_MSG_OK) {
@@ -130,7 +169,11 @@ static void send_command(uint8_t command) {
   if (s_answer_timer) {
     app_timer_cancel(s_answer_timer);
   }
-  s_answer_timer = app_timer_register(ANSWER_TIMEOUT_MS, show_no_answer, NULL);
+  s_answer_timer = app_timer_register(timeout_ms, show_no_answer, NULL);
+}
+
+static void send_command(uint8_t command) {
+  send_command_with_timeout(command, ANSWER_TIMEOUT_MS);
 }
 
 static void inbox_received(DictionaryIterator *iter, void *context) {
@@ -168,6 +211,10 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     s_time[0] = '\0';
   }
   update_ui(state->value->uint8);
+  if (state->value->uint8 == STATE_LOADING) {
+    // The phone says it is starting: wait for it to say playing, but not forever
+    s_answer_timer = app_timer_register(START_WAIT_MS, show_no_answer, NULL);
+  }
 }
 
 static void inbox_dropped(AppMessageResult reason, void *context) {
@@ -183,7 +230,16 @@ static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
 }
 
 static void select_click_handler(ClickRecognizerRef recognizer, void *context) {
-  send_command(CMD_PLAY_PAUSE);
+  if (s_state == STATE_PLAYING) {
+    send_command(CMD_PLAY_PAUSE);
+    return;
+  }
+  // Starting the book can take a few seconds (the server answers first): show it at once
+  snprintf(s_status, sizeof(s_status), "Starting...");
+  text_layer_set_text(s_status_layer, s_status);
+  spinner_start();
+  s_state = STATE_LOADING;
+  send_command_with_timeout(CMD_PLAY_PAUSE, START_ANSWER_MS);
 }
 
 static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
@@ -248,6 +304,14 @@ static void window_load(Window *window) {
   s_icon_back = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_ICON_BACK);
   s_icon_forward = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_ICON_FORWARD);
   s_icon_plus = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_ICON_PLUS);
+  s_spinner[0] = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_SPIN_0);
+  s_spinner[1] = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_SPIN_1);
+  s_spinner[2] = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_SPIN_2);
+  s_spinner[3] = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_SPIN_3);
+  s_spinner[4] = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_SPIN_4);
+  s_spinner[5] = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_SPIN_5);
+  s_spinner[6] = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_SPIN_6);
+  s_spinner[7] = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_SPIN_7);
   s_icon_minus = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_ICON_MINUS);
 
   s_action_bar = action_bar_layer_create();
@@ -309,6 +373,10 @@ static void window_unload(Window *window) {
   gbitmap_destroy(s_icon_pause);
   gbitmap_destroy(s_icon_back);
   gbitmap_destroy(s_icon_forward);
+  spinner_stop();
+  for (int i = 0; i < SPINNER_FRAMES; i++) {
+    gbitmap_destroy(s_spinner[i]);
+  }
   gbitmap_destroy(s_icon_plus);
   gbitmap_destroy(s_icon_minus);
   s_action_bar = NULL;
