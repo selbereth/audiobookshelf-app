@@ -29,7 +29,8 @@ android {
     buildConfig true
   }
   kotlinOptions {
-    freeCompilerArgs = ['-Xjvm-default=all']
+    // -Xskip-metadata-version-check: the PebbleKit client (see the Pebble line in dependencies) is built with a newer Kotlin than this project
+    freeCompilerArgs = ['-Xjvm-default=all', '-Xskip-metadata-version-check']
   }
   compileSdk rootProject.ext.compileSdkVersion
   defaultConfig {
@@ -128,6 +129,10 @@ dependencies {
 
   // Jackson for JSON
   implementation 'com.fasterxml.jackson.module:jackson-module-kotlin:2.12.2'
+
+  // Pebble smartwatch: receive commands from the watchapp and send it what is playing (see `pebble/`).
+  // 1.3.0 and later need compileSdk 37 and a newer Android Gradle plugin than this project uses.
+  implementation 'io.rebble.pebblekit2:client:1.2.0'
 }
 
 apply from: 'capacitor.build.gradle'

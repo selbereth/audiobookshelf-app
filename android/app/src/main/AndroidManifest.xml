@@ -115,6 +115,16 @@
             android:name="android.support.FILE_PROVIDER_PATHS"
             android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- The Pebble app binds to this when the Pebble watchapp (`pebble/`) is opened, starting this app's process if needed -->
+        <service
+            android:name=".pebble.PebbleListenerService"
+            android:exported="true"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="io.rebble.pebblekit2.RECEIVE_DATA_FROM_WATCH" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>
