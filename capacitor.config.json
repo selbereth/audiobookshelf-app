@@ -1,6 +1,6 @@
 {
   "appId": "com.selbereth.audiobookshelf",
-  "appName": "Selbereth Audiobooks",
+  "appName": "Selbershelf",
   "webDir": "dist",
   "plugins": {
     "CapacitorHttp": {
