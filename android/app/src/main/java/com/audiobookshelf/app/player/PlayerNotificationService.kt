@@ -1133,6 +1133,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           mutableListOf(
                   "com.audiobookshelf.app",
                   "com.audiobookshelf.app.debug",
+                  "com.selbereth.audiobookshelf",
+                  "com.selbereth.audiobookshelf.debug",
                   ANDROID_AUTO_PKG_NAME,
                   ANDROID_AUTO_SIMULATOR_PKG_NAME,
                   ANDROID_WEARABLE_PKG_NAME,

@@ -12,7 +12,7 @@ import kotlinx.coroutines.launch
 /**
  * Debug builds only: does what the watch asks, from adb, so the phone side can be tried without a watch.
  *
- *   adb shell am broadcast -n com.audiobookshelf.app.debug/com.audiobookshelf.app.pebble.PebbleDebugReceiver --ei command 1
+ *   adb shell am broadcast -n com.selbereth.audiobookshelf.debug/com.audiobookshelf.app.pebble.PebbleDebugReceiver --ei command 1
  *
  * command: 0 = status, 1 = play or pause (starts the most recent book), 2 = skip ahead, 3 = skip back.
  * The result is in logcat under the tag PebbleDebug. Starting from adb is not subject to the limits Android puts on

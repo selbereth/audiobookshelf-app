@@ -36,7 +36,8 @@ class PebbleListenerService : BasePebbleListenerService() {
   override fun onDestroy() {
     watcher?.cancel()
     controller.release()
-    sender.close()
+    // The library unbinds a connection that was never opened when nothing was sent, which throws
+    runCatching { sender.close() }
     super.onDestroy()
   }
 
