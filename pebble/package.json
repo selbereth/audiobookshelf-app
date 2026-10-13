@@ -1,0 +1,47 @@
+{
+  "name": "audiobookshelf-pebble",
+  "author": "Audiobookshelf",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Audiobookshelf",
+    "uuid": "481b78c4-0301-4950-af0b-dd24992f6602",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": ["emery", "basalt", "diorite", "flint"],
+    "watchapp": {
+      "watchface": false
+    },
+    "messageKeys": {
+      "Command": 0,
+      "State": 1,
+      "Title": 2,
+      "Chapter": 3,
+      "Position": 4,
+      "Duration": 5,
+      "ChapterNumber": 6,
+      "ChapterCount": 7
+    },
+    "companionApp": {
+      "android": {
+        "url": "https://github.com/advplyr/audiobookshelf-app",
+        "apps": [
+          { "package": "com.audiobookshelf.app.debug" },
+          { "package": "com.audiobookshelf.app" }
+        ]
+      }
+    },
+    "resources": {
+      "media": [
+        { "type": "bitmap", "name": "IMAGE_ICON_PLAY", "file": "images/play.png" },
+        { "type": "bitmap", "name": "IMAGE_ICON_PAUSE", "file": "images/pause.png" },
+        { "type": "bitmap", "name": "IMAGE_ICON_BACK", "file": "images/back.png" },
+        { "type": "bitmap", "name": "IMAGE_ICON_FORWARD", "file": "images/forward.png" },
+        { "type": "bitmap", "name": "IMAGE_ICON_PLUS", "file": "images/plus.png" },
+        { "type": "bitmap", "name": "IMAGE_ICON_MINUS", "file": "images/minus.png" }
+      ]
+    }
+  }
+}
