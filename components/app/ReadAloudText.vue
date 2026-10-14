@@ -66,6 +66,7 @@ export default {
     this.lastWord = null
     this.cur = null // where the current sentence is in the list: { top, bottom, length }
     this.y = 0 // how far the list is scrolled now
+    this.needsSnap = true // the first position after opening is jumped to, not scrolled to
     this.raf = null
     this.lastFrame = 0
   },
@@ -148,7 +149,15 @@ export default {
         const limit = this.lastWord ? this.lastWord.start + RUN_AHEAD_CHARS : this.cur.length
         this.pos = Math.min(this.cur.length, limit, this.pos + dt / this.msPerChar)
       }
-      this.y += (this.targetY() - this.y) * (1 - Math.exp(-dt / SMOOTHING_MS))
+      const target = this.targetY()
+      const height = this.$refs.viewport ? this.$refs.viewport.clientHeight : 0
+      if (height > 0 && (this.needsSnap || Math.abs(target - this.y) > height * 1.5)) {
+        // Opening the view (or a seek far away): the text is simply there, it does not ride down from the top
+        this.y = target
+        this.needsSnap = false
+      } else {
+        this.y += (target - this.y) * (1 - Math.exp(-dt / SMOOTHING_MS))
+      }
       list.style.transform = `translate3d(0, ${-this.y}px, 0)`
     },
     onResize() {
