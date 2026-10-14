@@ -80,6 +80,8 @@ class TtsService : Service() {
   private lateinit var audioManager: AudioManager
   private var focusRequest: AudioFocusRequest? = null
   private var wakeLock: PowerManager.WakeLock? = null
+  /** Keeps this app 'playing audio' while the speech engine (another app) speaks, so the media buttons come to this session */
+  private val silentAudio = SilentAudio()
   private var title = ""
   private var author = ""
   /** The cover, as in the audiobook notification: it is what gives the notification its colours */
@@ -328,6 +330,7 @@ class TtsService : Service() {
       .setState(if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1f)
       .build()
     session.setPlaybackState(state)
+    if (playing) silentAudio.start() else silentAudio.stop()
     session.setMetadata(
       MediaMetadataCompat.Builder()
         .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
@@ -392,6 +395,7 @@ class TtsService : Service() {
     sleepHandler.removeCallbacks(sleepRunnable)
     scope.cancel()
     releaseResources()
+    silentAudio.stop()
     controller.release()
     session.isActive = false
     session.release()
