@@ -242,7 +242,7 @@ class AbsTts : Plugin() {
 
   @PluginMethod
   fun getSnapshot(call: PluginCall) {
-    call.resolve(JSObject().put("session", TtsSnapshot.load(context)?.session ?: ""))
+    call.resolve(JSObject().put("session", TtsSnapshot.load(context)?.session ?: "").put("resumePlaying", TtsHeadless.consumeResumeAfterHandOver()))
   }
 
   @PluginMethod

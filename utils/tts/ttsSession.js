@@ -463,7 +463,13 @@ class TtsSession {
       saved = null
     }
     // Reading that was last done without the app's screen (started from the Pebble watch) is saved natively only
-    const native = await AbsTts.getSnapshot().catch(() => null)
+    let native = await AbsTts.getSnapshot().catch(() => null)
+    // The hidden reading was speaking when this screen opened: it stops and writes down where it got to, and this screen carries on
+    const resumePlaying = !!native?.resumePlaying
+    if (resumePlaying) {
+      await new Promise((resolve) => setTimeout(resolve, 1500)) // the hidden page writes its last position as it stops
+      native = (await AbsTts.getSnapshot().catch(() => null)) || native
+    }
     if (native?.session) {
       try {
         const fromNative = JSON.parse(native.session)
@@ -474,6 +480,11 @@ class TtsSession {
     }
     if (this.active) return
     this.restoreFrom(saved)
+    if (resumePlaying && this.store.state.tts.restored) {
+      // A downloaded book can be opened at once; a book from the server needs the sign in to finish first
+      if (this.meta?.isLocal || this.store.state.user.user) this.resume()
+      else this.resumeWhenSignedIn = true
+    }
   }
 
   restoreFrom(saved) {
@@ -509,6 +520,10 @@ class TtsSession {
   checkRestoredOwner() {
     const m = this.meta
     const user = this.store.state.user.user
+    if (this.resumeWhenSignedIn && user) {
+      this.resumeWhenSignedIn = false
+      if (this.store.state.tts.restored && m && (!m.userId || user.id === m.userId)) return this.resume()
+    }
     if (!this.store.state.tts.restored || !m || !user || !m.userId || user.id === m.userId) return
     this.cleanup(false, true)
   }
