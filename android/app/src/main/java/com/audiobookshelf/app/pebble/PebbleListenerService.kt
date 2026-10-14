@@ -115,6 +115,8 @@ class PebbleListenerService : BasePebbleListenerService() {
       PebbleProtocol.KEY_DURATION to PebbleDictionaryItem.UInt32(status.durationSeconds.toUInt()),
       PebbleProtocol.KEY_CHAPTER_NUMBER to PebbleDictionaryItem.UInt16(status.chapterNumber.toUShort()),
       PebbleProtocol.KEY_CHAPTER_COUNT to PebbleDictionaryItem.UInt16(status.chapterCount.toUShort()),
+      PebbleProtocol.KEY_CHAPTER_POSITION to PebbleDictionaryItem.UInt32(status.chapterPosition.toUInt()),
+      PebbleProtocol.KEY_CHAPTER_DURATION to PebbleDictionaryItem.UInt32(status.chapterDuration.toUInt()),
       PebbleProtocol.KEY_KIND to PebbleDictionaryItem.UInt8(status.kind.toUByte()),
       PebbleProtocol.KEY_VOLUME to PebbleDictionaryItem.UInt8(status.volume.toUByte())
     )

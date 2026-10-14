@@ -35,7 +35,10 @@ data class PebbleStatus(
   val positionSeconds: Int = 0,
   val durationSeconds: Int = 0,
   val volume: Int = 0, // the media volume step, so the watch can tell when a volume press really changed it
-  val kind: Int = PebbleProtocol.KIND_AUDIO
+  val kind: Int = PebbleProtocol.KIND_AUDIO,
+  /** How far into the current chapter and how long it is, in the same units as the book position and duration (0 when unknown) */
+  val chapterPosition: Int = 0,
+  val chapterDuration: Int = 0
 )
 
 /**
@@ -96,6 +99,7 @@ class PebbleController(private val context: Context) {
 
   private fun ttsStatus(snapshot: TtsSnapshot, state: Int? = null): PebbleStatus {
     val reading = TtsService.instance?.controller?.playing == true
+    val hasRange = snapshot.chapterEnd > snapshot.chapterStart
     return PebbleStatus(
       state = state ?: if (reading) PebbleProtocol.STATE_PLAYING else PebbleProtocol.STATE_PAUSED,
       title = title(snapshot.title),
@@ -106,7 +110,9 @@ class PebbleController(private val context: Context) {
       positionSeconds = (snapshot.progress.coerceIn(0.0, 100.0) * 100).toInt(),
       durationSeconds = 10000,
       volume = volumeStep(),
-      kind = PebbleProtocol.KIND_EPUB
+      kind = PebbleProtocol.KIND_EPUB,
+      chapterPosition = if (hasRange) ((snapshot.progress - snapshot.chapterStart).coerceIn(0.0, snapshot.chapterEnd - snapshot.chapterStart) * 100).toInt() else 0,
+      chapterDuration = if (hasRange) ((snapshot.chapterEnd - snapshot.chapterStart) * 100).toInt() else 0
     )
   }
 
@@ -162,7 +168,9 @@ class PebbleController(private val context: Context) {
       chapterCount = chapters.size,
       positionSeconds = time.coerceAtLeast(0.0).toInt(),
       durationSeconds = session.duration.coerceAtLeast(0.0).toInt(),
-      volume = volumeStep()
+      volume = volumeStep(),
+      chapterPosition = if (index >= 0) (time - chapters[index].start).coerceAtLeast(0.0).toInt() else 0,
+      chapterDuration = if (index >= 0) (chapters[index].end - chapters[index].start).coerceAtLeast(0.0).toInt() else 0
     )
   }
 
