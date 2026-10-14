@@ -253,6 +253,7 @@ class TtsSession {
       // localStorage can be unavailable
     }
     AbsTts.setRate({ rate })
+    this.persist(true) // the saved session carries the speed
   }
 
   // --- Sleep timer: native does the work (so it fires with the screen off), this only mirrors it for the UI ---
@@ -413,6 +414,8 @@ class TtsSession {
         serverAddress: this.store.getters['user/getServerAddress'] || null,
         cfi: this.currentCfi,
         progress: this.store.state.tts.progress,
+        // The reading speed: the session the Pebble watch starts without the app's screen has no localStorage of its own to read it from
+        rate: this.store.state.tts.rate,
         savedAt: Date.now()
       }
       localStorage.setItem(LAST_SESSION_KEY, JSON.stringify(saved))
@@ -484,6 +487,12 @@ class TtsSession {
     }
     this.meta = { ...saved }
     this.currentCfi = saved.cfi
+    // Without the app's screen (the watch started it) there is no saved speed to read: use the one the session was saved with
+    try {
+      if (saved.rate > 0 && !localStorage.getItem(RATE_STORAGE_KEY)) this.store.commit('tts/setRate', saved.rate)
+    } catch (error) {
+      // localStorage can be unavailable
+    }
     this.store.commit('tts/setRestoredSession', {
       libraryItemId: saved.libraryItem.id,
       serverLibraryItemId: saved.serverLibraryItemId,
