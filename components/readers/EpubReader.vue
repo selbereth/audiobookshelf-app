@@ -17,6 +17,8 @@ import { saveEbookProgress } from '@/utils/ebookProgress'
 
 /** The status bar and navigation bar showing or hiding changes the window height by less than this */
 const SYSTEM_BAR_CHANGE = 120
+const MAX_PAGES_FROM_AUDIO = 1 // while read aloud runs, the reader may be this many pages from the sentence being read; further is pulled back
+const PAGE_TURN_SETTLE_MS = 350
 
 export default {
   props: {
@@ -230,8 +232,36 @@ export default {
         } else if (this.ttsFollowAlong) {
           this.ttsIgnoreRelocatedUntil = Date.now() + 1500
           this.rendition.display(cfi)
+        } else if (this.ttsPageDistance(cfi, loc) > MAX_PAGES_FROM_AUDIO) {
+          // The reader looked away and the audio has moved on until it is further away than a page: back to the audio
+          this.returnToTtsPage(cfi)
         }
       }
+    },
+    /**
+     * How many pages the sentence being read is from the pages on screen: 0 when it is on them, 1 on the next or the previous page.
+     * Measured in the book's locations (a fixed amount of text each) against the size of the pages on screen, so it also works across
+     * chapters. null when it cannot be told (locations not generated yet).
+     */
+    ttsPageDistance(cfi, loc) {
+      const locations = this.book?.locations
+      if (!cfi || !loc?.start || !loc?.end || !locations?.length()) return null
+      const first = locations.locationFromCfi(loc.start.cfi)
+      const last = locations.locationFromCfi(loc.end.cfi)
+      const spoken = locations.locationFromCfi(cfi)
+      if (![first, last, spoken].every((n) => typeof n === 'number' && n >= 0)) return null
+      const page = Math.max(1, last - first + 1)
+      if (spoken < first) return (first - spoken) / page
+      if (spoken > last) return (spoken - last) / page
+      return 0
+    },
+    /** The reader is more than a page from the audio: bring them back to the page it is on */
+    returnToTtsPage(cfi) {
+      console.log('[EpubReader] more than a page from the audio, returning to', cfi)
+      this.ttsFollowAlong = true
+      this.ttsIgnoreRelocatedUntil = Date.now() + 1500
+      this.rendition.display(cfi)
+      this.$toast.info(this.$strings.MessageTtsBackToPage)
     },
     /** Is the sentence being read on the page `location` (from epub.js's relocated event) */
     isTtsSentenceVisible(location) {
@@ -371,6 +401,12 @@ export default {
       if (this.ttsRunning && !this.inittingDisplay && Date.now() > this.ttsIgnoreRelocatedUntil && !this.isTtsSentenceVisible(location)) {
         // The listener moved to a page that does not have the sentence being read: stop pulling them back to it
         this.ttsFollowAlong = false
+        // ...unless that is further than a page from it: the audio and the reader must not drift apart
+        const cfi = ttsSession.currentCfi
+        if (this.ttsPageDistance(cfi, location) > MAX_PAGES_FROM_AUDIO) {
+          setTimeout(() => this.returnToTtsPage(cfi), PAGE_TURN_SETTLE_MS) // let the page turn finish first
+          return
+        }
       }
       if (this.inittingDisplay) {
         console.log(`[EpubReader] relocated but initting display ${location.start.cfi}`)

@@ -125,6 +125,7 @@
   "LabelChapters": "Chapters",
   "LabelClosePlayer": "Close player",
   "LabelReadAloud": "Read aloud",
+  "MessageTtsBackToPage": "Back to the page being read",
   "MessageTtsFailedToStart": "Failed to start read aloud",
   "MessageTtsFailedToOpenBook": "Failed to open the book",
   "MessageTtsFailedToReadBook": "Failed to read the whole book",
