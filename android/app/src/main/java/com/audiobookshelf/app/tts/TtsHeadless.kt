@@ -232,6 +232,11 @@ object TtsHeadless {
         return context.contentResolver.openInputStream(Uri.parse(file.contentUrl))?.use { it.readBytes() }
           ?: throw IllegalStateException("Could not open the downloaded EPUB")
       }
+      // The app's screen sets the server connection when it starts: without it (the watch started this) there is no server address
+      if (DeviceManager.serverConnectionConfig == null) {
+        DeviceManager.serverConnectionConfig = DeviceManager.getServerConnectionConfig(DeviceManager.deviceData.lastServerConnectionConfigId)
+      }
+      if (DeviceManager.serverConnectionConfig == null) throw IllegalStateException("Log in to the server in the app first")
       // The access token can have expired: asking the server for the user refreshes it when it has
       val latch = java.util.concurrent.CountDownLatch(1)
       ApiHandler(context).getCurrentUser { latch.countDown() }
