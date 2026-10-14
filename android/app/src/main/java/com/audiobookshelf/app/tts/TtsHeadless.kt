@@ -66,12 +66,23 @@ object TtsHeadless {
     }
   }
 
+  /** The hidden reading was speaking when the app's screen opened: the screen carries on reading instead of staying paused */
+  @Volatile private var resumeAfterHandOver = false
+
+  /** Asked once by the app's screen at start */
+  fun consumeResumeAfterHandOver(): Boolean {
+    val value = resumeAfterHandOver
+    resumeAfterHandOver = false
+    return value
+  }
+
   /** True while the hidden page is running a session */
   val isRunning get() = webView != null
 
   /** The app's screen is opening and takes over: write down where the reading is, stop it and let go of the page */
   fun handOver() {
     val view = webView ?: return
+    resumeAfterHandOver = TtsService.instance?.controller?.playing == true
     main.post {
       view.evaluateJavascript("ttsHeadless.handOver().catch(e => console.error('handOver failed: ' + e))", null)
       main.postDelayed({ shutdownNow() }, 2000)
@@ -233,6 +244,11 @@ object TtsHeadless {
         return context.contentResolver.openInputStream(Uri.parse(file.contentUrl))?.use { it.readBytes() }
           ?: throw IllegalStateException("Could not open the downloaded EPUB")
       }
+      // The app's screen sets the server connection when it starts: without it (the watch started this) there is no server address
+      if (DeviceManager.serverConnectionConfig == null) {
+        DeviceManager.serverConnectionConfig = DeviceManager.getServerConnectionConfig(DeviceManager.deviceData.lastServerConnectionConfigId)
+      }
+      if (DeviceManager.serverConnectionConfig == null) throw IllegalStateException("Log in to the server in the app first")
       // The access token can have expired: asking the server for the user refreshes it when it has
       val latch = java.util.concurrent.CountDownLatch(1)
       ApiHandler(context).getCurrentUser { latch.countDown() }

@@ -204,6 +204,24 @@ export default {
       }
       ttsSession.attachReader(this.ttsHandler)
     },
+    /**
+     * epub.js makes a new iframe every time a chapter is rendered again but keeps the highlight layer it made for the old one, which
+     * stays tied to that detached iframe: it measures 0 x 0, so the layer is clipped away and the highlight is not shown (the text being
+     * read is not marked). Point the layer at the current iframe and measure it again.
+     */
+    repairHighlightLayer() {
+      try {
+        this.rendition.views().forEach((view) => {
+          const pane = view.pane
+          if (pane && view.iframe && pane.target !== view.iframe) {
+            pane.target = view.iframe
+            pane.render()
+          }
+        })
+      } catch (error) {
+        console.warn('[EpubReader] failed to repair the highlight layer', error)
+      }
+    },
     clearTtsHighlight() {
       if (this.ttsHighlightCfi) {
         try {
@@ -223,6 +241,7 @@ export default {
       } catch (error) {
         console.warn('[EpubReader] failed to highlight', error)
       }
+      this.repairHighlightLayer()
       const loc = this.rendition.currentLocation()
       if (loc?.start && loc?.end) {
         const compare = new ePub.CFI()
@@ -506,6 +525,8 @@ export default {
 
         // set up event listeners
         reader.rendition.on('relocated', reader.relocated)
+        // A chapter rendered again gets its highlights back on a stale layer: fix it once they are in
+        reader.rendition.on('rendered', () => setTimeout(() => reader.repairHighlightLayer(), 50))
 
         reader.rendition.on('displayError', (err) => {
           console.log('[EpubReader] Display error', err)
