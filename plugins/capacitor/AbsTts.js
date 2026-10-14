@@ -19,6 +19,9 @@ class AbsTtsWeb extends WebPlugin {
   async getSnapshot() {
     return {}
   }
+  async adopt() {
+    return { adopted: false }
+  }
   async saveSnapshot() {}
   async clearSnapshot() {}
   async getWindow() {

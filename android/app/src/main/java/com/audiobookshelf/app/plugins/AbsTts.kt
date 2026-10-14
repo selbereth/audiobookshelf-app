@@ -48,15 +48,37 @@ class AbsTts : Plugin() {
   }
 
   override fun load() {
-    // The app's screen opens while the hidden read-aloud runs: the screen takes over (the reading stops where it is)
-    if (TtsHeadless.isRunning) TtsHeadless.handOver()
+    // While the hidden read-aloud (started from the watch) runs, its page keeps the events. The screen takes it over without
+    // stopping the speech once it is ready: see `adopt`.
+    if (!TtsHeadless.isRunning) TtsService.eventListener = listener
+  }
+
+  /**
+   * The app's screen takes over the reading the hidden page is doing, without a gap: the sentences already queued in the speech engine
+   * keep playing, the old buffer behind them is dropped, and the app feeds a new stream (streamId) that continues after the last kept one.
+   */
+  @PluginMethod
+  fun adopt(call: PluginCall) {
+    val controller = svc?.controller
+    if (controller == null) {
+      call.resolve(JSObject().put("adopted", false))
+      return
+    }
+    TtsHeadless.release()
     TtsService.eventListener = listener
+    val last = controller.adopt(call.getInt("streamId", 0) ?: 0)
+    call.resolve(
+      JSObject().put("adopted", last != null).put("playing", controller.playing)
+        .put("id", last?.id).put("cfi", last?.cfi).put("spine", last?.spine)
+    )
   }
 
   private val svc get() = TtsService.instance
 
   @PluginMethod
   fun start(call: PluginCall) {
+    // Starting something else while the hidden page is reading: the page is no longer the owner
+    if (TtsHeadless.isRunning) TtsHeadless.release()
     TtsService.eventListener = listener
     // Only one thing owns media playback: pause the audiobook player
     try {
@@ -244,7 +266,7 @@ class AbsTts : Plugin() {
 
   @PluginMethod
   fun getSnapshot(call: PluginCall) {
-    call.resolve(JSObject().put("session", TtsSnapshot.load(context)?.session ?: "").put("resumePlaying", TtsHeadless.consumeResumeAfterHandOver()))
+    call.resolve(JSObject().put("session", TtsSnapshot.load(context)?.session ?: "").put("headlessRunning", TtsHeadless.isRunning))
   }
 
   @PluginMethod
