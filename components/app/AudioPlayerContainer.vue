@@ -189,6 +189,11 @@ export default {
         this.$refs.audioPlayer.closePlayback()
       }
     },
+    /** The speed a book starts at: the saved setting, which every speed change updates. The player component's own value is 1 until
+     * the native player reports, so a book started after the app was restarted got 1x instead of the user's speed. */
+    getStartPlaybackRate() {
+      return this.$store.getters['user/getUserSetting']('playbackRate') || 1
+    },
     castLocalItem() {
       if (!this.serverLibraryItemId) {
         this.$toast.error(`Cannot cast locally downloaded media`)
@@ -198,10 +203,7 @@ export default {
       }
     },
     playServerLibraryItemAndCast(libraryItemId, episodeId) {
-      var playbackRate = 1
-      if (this.$refs.audioPlayer) {
-        playbackRate = this.$refs.audioPlayer.currentPlaybackRate || 1
-      }
+      const playbackRate = this.getStartPlaybackRate()
       AbsAudioPlayer.prepareLibraryItem({ libraryItemId, episodeId, playWhenReady: false, playbackRate })
         .then((data) => {
           if (data.error) {
@@ -265,10 +267,7 @@ export default {
       this.serverLibraryItemId = null
       this.serverEpisodeId = null
 
-      let playbackRate = 1
-      if (this.$refs.audioPlayer) {
-        playbackRate = this.$refs.audioPlayer.currentPlaybackRate || 1
-      }
+      const playbackRate = this.getStartPlaybackRate()
 
       console.log('Called playLibraryItem', libraryItemId)
       const preparePayload = { libraryItemId, episodeId, playWhenReady: startWhenReady, playbackRate }
