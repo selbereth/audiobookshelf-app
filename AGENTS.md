@@ -15,6 +15,11 @@ Work is split into branches that must merge cleanly with each other. Do not mix 
 | `add-auto-delete` | auto-delete of finished downloads | `audiobookshelf-auto-delete` |
 | `pebble` | the phone side of the Pebble watch app (the watchapp is in its own repo, `selbershelf-pebble`) | `audiobookshelf-pebble` |
 
+- **Every feature and every bug fix is done on its own branch and merged into `master`. Never commit the work straight to `master`.**
+  Before the first edit: `git switch master`, then `git switch -c <short-name>` (for example `fix-stream-start` or `feature-spinner`).
+  Commit on that branch, check it (build, emulator), then merge with `git switch master && git merge --no-ff <short-name>`. One branch per
+  feature or fix, not one for a whole session. The only things that go directly on `master` are the merge commits themselves. Keep the
+  branch after the merge unless asked to delete it. Do not push or merge without the user having asked for it in this session.
 - Check `git branch --show-current` before you start. Features that exist on another branch are not on this one.
 - Prefer new files. When a shared file must change (`android/app/build.gradle`, `AndroidManifest.xml`, `MainActivity.kt`,
   `AudioPlayer.vue`), keep the edit small and put it at the end of its block. Check with
