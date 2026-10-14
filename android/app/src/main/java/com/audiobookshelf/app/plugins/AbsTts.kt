@@ -7,8 +7,10 @@ import androidx.core.content.ContextCompat
 import com.audiobookshelf.app.MainActivity
 import com.audiobookshelf.app.player.PlayerNotificationService
 import com.audiobookshelf.app.tts.TtsController
+import com.audiobookshelf.app.tts.TtsHeadless
 import com.audiobookshelf.app.tts.TtsSentence
 import com.audiobookshelf.app.tts.TtsService
+import com.audiobookshelf.app.tts.TtsSnapshot
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -46,6 +48,8 @@ class AbsTts : Plugin() {
   }
 
   override fun load() {
+    // The app's screen opens while the hidden read-aloud runs: the screen takes over (the reading stops where it is)
+    if (TtsHeadless.isRunning) TtsHeadless.handOver()
     TtsService.eventListener = listener
   }
 
@@ -216,6 +220,35 @@ class AbsTts : Plugin() {
       voices.put(JSObject().put("id", it.name).put("name", it.name).put("lang", it.locale.toLanguageTag()).put("quality", it.quality).put("network", it.isNetworkConnectionRequired))
     }
     call.resolve(JSObject().put("voices", voices))
+  }
+
+  @PluginMethod
+  fun saveSnapshot(call: PluginCall) {
+    TtsSnapshot.save(
+      context,
+      TtsSnapshot(
+        call.getString("libraryItemId") ?: return call.resolve(),
+        call.getString("title") ?: "",
+        call.getString("chapter") ?: "",
+        call.getInt("chapterNumber", 0) ?: 0,
+        call.getInt("chapterCount", 0) ?: 0,
+        call.getDouble("progress") ?: 0.0,
+        System.currentTimeMillis(),
+        call.getString("session") ?: ""
+      )
+    )
+    call.resolve()
+  }
+
+  @PluginMethod
+  fun getSnapshot(call: PluginCall) {
+    call.resolve(JSObject().put("session", TtsSnapshot.load(context)?.session ?: ""))
+  }
+
+  @PluginMethod
+  fun clearSnapshot(call: PluginCall) {
+    TtsSnapshot.clear(context)
+    call.resolve()
   }
 
   @PluginMethod

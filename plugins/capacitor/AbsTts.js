@@ -16,6 +16,11 @@ class AbsTtsWeb extends WebPlugin {
   async setSleepTimer() {}
   async adjustSleepTimer() {}
   async cancelSleepTimer() {}
+  async getSnapshot() {
+    return {}
+  }
+  async saveSnapshot() {}
+  async clearSnapshot() {}
   async getWindow() {
     return { sentences: [], currentId: null }
   }

@@ -400,29 +400,46 @@ class TtsSession {
     this.lastPersistedAt = Date.now()
     try {
       const m = this.meta
-      localStorage.setItem(
-        LAST_SESSION_KEY,
-        JSON.stringify({
-          libraryItem: trimLibraryItem(m.libraryItem),
-          localLibraryItem: trimLocalLibraryItem(m.localLibraryItem),
-          url: m.url,
-          isLocal: m.isLocal,
-          serverLibraryItemId: m.serverLibraryItemId,
-          localLibraryItemId: m.localLibraryItemId,
-          keepProgress: m.keepProgress,
-          // The session belongs to whoever was signed in to this server: not offered to anyone else
-          userId: this.store.state.user.user?.id || null,
-          serverAddress: this.store.getters['user/getServerAddress'] || null,
-          cfi: this.currentCfi,
-          progress: this.store.state.tts.progress
-        })
-      )
+      const saved = {
+        libraryItem: trimLibraryItem(m.libraryItem),
+        localLibraryItem: trimLocalLibraryItem(m.localLibraryItem),
+        url: m.url,
+        isLocal: m.isLocal,
+        serverLibraryItemId: m.serverLibraryItemId,
+        localLibraryItemId: m.localLibraryItemId,
+        keepProgress: m.keepProgress,
+        // The session belongs to whoever was signed in to this server: not offered to anyone else
+        userId: this.store.state.user.user?.id || null,
+        serverAddress: this.store.getters['user/getServerAddress'] || null,
+        cfi: this.currentCfi,
+        progress: this.store.state.tts.progress,
+        savedAt: Date.now()
+      }
+      localStorage.setItem(LAST_SESSION_KEY, JSON.stringify(saved))
+      this.saveNativeSnapshot(saved)
     } catch (error) {
       // localStorage can be unavailable
     }
   }
 
+  /** Native code (the Pebble watch) cannot read localStorage: tell it which book this is and how far it got */
+  saveNativeSnapshot(saved) {
+    const tts = this.store.state.tts
+    const chapter = tts.chapters[tts.currentChapterIndex]
+    AbsTts.saveSnapshot({
+      libraryItemId: this.meta?.libraryItem?.id || tts.libraryItemId,
+      title: tts.title || '',
+      chapter: chapter?.title || '',
+      chapterNumber: chapter ? tts.currentChapterIndex + 1 : 0,
+      chapterCount: tts.chapters.length,
+      progress: tts.progress || 0,
+      // Everything needed to open the book again without the app's screen (the Pebble watch starts it that way)
+      session: JSON.stringify(saved)
+    }).catch(() => {})
+  }
+
   forgetPersisted() {
+    AbsTts.clearSnapshot().catch(() => {})
     try {
       localStorage.removeItem(LAST_SESSION_KEY)
     } catch (error) {
@@ -434,7 +451,7 @@ class TtsSession {
    * At app start: when read-aloud was last in use show it again, paused, where it was.
    * Nothing is loaded until the listener presses play (see `resume`).
    */
-  restore() {
+  async restore() {
     if (this.active) return
     let saved = null
     try {
@@ -442,6 +459,21 @@ class TtsSession {
     } catch (error) {
       saved = null
     }
+    // Reading that was last done without the app's screen (started from the Pebble watch) is saved natively only
+    const native = await AbsTts.getSnapshot().catch(() => null)
+    if (native?.session) {
+      try {
+        const fromNative = JSON.parse(native.session)
+        if (!saved || (fromNative.savedAt || 0) > (saved.savedAt || 0)) saved = fromNative
+      } catch (error) {
+        // not usable: keep what localStorage has
+      }
+    }
+    if (this.active) return
+    this.restoreFrom(saved)
+  }
+
+  restoreFrom(saved) {
     if (!saved?.libraryItem?.id || !saved.cfi || !saved.url) return
     const user = this.store.state.user.user
     const serverAddress = this.store.getters['user/getServerAddress']
@@ -488,7 +520,9 @@ class TtsSession {
   /** Opens the epub without a reader */
   async openBook(meta) {
     const customRequest = async (url) => this.app.$axios.$get(url, { responseType: 'arraybuffer' })
-    const book = new ePub(meta.url, { openAs: 'epub', requestMethod: meta.isLocal ? null : customRequest })
+    // Without the app's screen (headless.js) the file is fetched natively: there is no axios and the page has no server origin
+    const data = this.loadBookData ? await this.loadBookData(meta) : null
+    const book = data ? new ePub(data, { openAs: 'binary' }) : new ePub(meta.url, { openAs: 'epub', requestMethod: meta.isLocal ? null : customRequest })
     await book.ready
     try {
       // Location data the reader generated gives the progress percentage

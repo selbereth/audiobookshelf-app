@@ -14,9 +14,13 @@ import com.audiobookshelf.app.device.DeviceManager
 import com.audiobookshelf.app.player.PlayerListener
 import com.audiobookshelf.app.player.PlayerNotificationService
 import com.audiobookshelf.app.server.ApiHandler
+import com.audiobookshelf.app.tts.TtsHeadless
+import com.audiobookshelf.app.tts.TtsService
+import com.audiobookshelf.app.tts.TtsSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
+import com.google.android.exoplayer2.Player
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -29,7 +33,9 @@ data class PebbleStatus(
   val chapterNumber: Int = 0,
   val chapterCount: Int = 0,
   val positionSeconds: Int = 0,
-  val durationSeconds: Int = 0
+  val durationSeconds: Int = 0,
+  val volume: Int = 0, // the media volume step, so the watch can tell when a volume press really changed it
+  val kind: Int = PebbleProtocol.KIND_AUDIO
 )
 
 /**
@@ -76,14 +82,71 @@ class PebbleController(private val context: Context) {
 
   private fun PlayerNotificationService.isPlayingNow() = hasBook() && PlayerListener.lazyIsPlaying
 
+  /**
+   * The EPUB read-aloud session when that is what the watch controls: it is reading now, or (when nothing plays) it was
+   * used after the audiobook was. Null when the watch controls the audiobook player.
+   */
+  private fun currentTts(): TtsSnapshot? {
+    val snapshot = TtsSnapshot.load(context) ?: return null
+    if (TtsService.instance?.controller?.playing == true) return snapshot
+    if (PlayerNotificationService.isStarted && PlayerListener.lazyIsPlaying) return null
+    val audioAt = DeviceManager.deviceData.lastPlaybackSession?.updatedAt ?: 0L
+    return if (snapshot.updatedAt > audioAt) snapshot else null
+  }
+
+  private fun ttsStatus(snapshot: TtsSnapshot, state: Int? = null): PebbleStatus {
+    val reading = TtsService.instance?.controller?.playing == true
+    return PebbleStatus(
+      state = state ?: if (reading) PebbleProtocol.STATE_PLAYING else PebbleProtocol.STATE_PAUSED,
+      title = title(snapshot.title),
+      chapter = title(snapshot.chapter),
+      chapterNumber = snapshot.chapterNumber,
+      chapterCount = snapshot.chapterCount,
+      // The percentage in hundredths of a percent: the watch shows it as "42%" and draws the bar from it
+      positionSeconds = (snapshot.progress.coerceIn(0.0, 100.0) * 100).toInt(),
+      durationSeconds = 10000,
+      volume = volumeStep(),
+      kind = PebbleProtocol.KIND_EPUB
+    )
+  }
+
+  /** Play or pause the read-aloud. When it is not running (the app was closed) the app is opened to carry on where it was. */
+  private suspend fun ttsPlayPause(snapshot: TtsSnapshot): PebbleStatus {
+    val service = TtsService.instance
+    if (service != null) {
+      withContext(Dispatchers.Main) { if (service.controller.playing) service.controller.pause() else service.startPlayback() }
+      return ttsStatus(snapshot)
+    }
+    if (snapshot.session.isEmpty()) return error("Read aloud once in the app first")
+    return try {
+      // The reading is done by the web part (it opens the book and cuts the text into sentences): it runs in a hidden
+      // page, the app's screen stays closed. Only one thing owns playback: the audiobook player is paused first.
+      if (PlayerNotificationService.isStarted) {
+        player()?.let { withContext(Dispatchers.Main) { it.pause() } }
+      }
+      TtsHeadless.resume(context, snapshot.session)
+      ttsStatus(snapshot, PebbleProtocol.STATE_LOADING)
+    } catch (e: Exception) {
+      Log.e(tag, "Failed to start reading aloud", e)
+      error("Could not start reading aloud")
+    }
+  }
+
+  private suspend fun ttsSkip(forward: Boolean, snapshot: TtsSnapshot): PebbleStatus {
+    val service = TtsService.instance ?: return ttsStatus(snapshot) // not running: skipping has no meaning
+    withContext(Dispatchers.Main) { service.controller.skip("paragraph", if (forward) 1 else -1) }
+    return ttsStatus(snapshot)
+  }
+
   /** What is playing, or what would start. Binds only when the player is already running. */
   suspend fun status(): PebbleStatus {
+    currentTts()?.let { return ttsStatus(it) }
     val service = if (PlayerNotificationService.isStarted) player() else null
     service?.currentPlaybackSession?.let {
       val state = if (service.isPlayingNow()) PebbleProtocol.STATE_PLAYING else PebbleProtocol.STATE_PAUSED
       return describe(state, it, withContext(Dispatchers.Main) { service.getCurrentTimeSeconds() })
     }
-    val last = DeviceManager.deviceData.lastPlaybackSession ?: return PebbleStatus(PebbleProtocol.STATE_NOTHING_TO_PLAY, "")
+    val last = DeviceManager.deviceData.lastPlaybackSession ?: return PebbleStatus(PebbleProtocol.STATE_NOTHING_TO_PLAY, "", volume = volumeStep())
     return describe(PebbleProtocol.STATE_PAUSED, last, last.currentTime)
   }
 
@@ -98,7 +161,8 @@ class PebbleController(private val context: Context) {
       chapterNumber = if (index >= 0) index + 1 else 0,
       chapterCount = chapters.size,
       positionSeconds = time.coerceAtLeast(0.0).toInt(),
-      durationSeconds = session.duration.coerceAtLeast(0.0).toInt()
+      durationSeconds = session.duration.coerceAtLeast(0.0).toInt(),
+      volume = volumeStep()
     )
   }
 
@@ -120,8 +184,11 @@ class PebbleController(private val context: Context) {
    */
   suspend fun waitUntilPlaying(): PebbleStatus {
     var nudges = 0
-    repeat(WAIT_SECONDS) { second ->
+    val waitSeconds = if (currentTts() != null) TTS_WAIT_SECONDS else WAIT_SECONDS
+    repeat(waitSeconds) { second ->
       delay(1000)
+      // Read-aloud from the watch: the app has to start and open the book first, so it can take a while
+      if (TtsService.instance?.controller?.playing == true) return status()
       val service = if (PlayerNotificationService.isStarted) player() else null
       if (service != null && service.hasBook()) {
         if (service.isPlayingNow()) return status()
@@ -132,16 +199,27 @@ class PebbleController(private val context: Context) {
         }
       }
     }
-    return status()
+    // Still not playing: say so instead of showing "Paused", as if nothing had been asked
+    Log.w(tag, "The book did not start playing")
+    return error("Could not start playback. Check the phone's connection and try again")
   }
 
   private suspend fun playPause(): PebbleStatus {
+    currentTts()?.let { return ttsPlayPause(it) }
     val service = player() ?: return error("Open Audiobookshelf on the phone")
-    if (service.hasBook()) {
+    // A book whose loading failed (the server did not answer) stays "loaded" but the player is idle and play does nothing:
+    // load it again instead
+    val failed = withContext(Dispatchers.Main) { service.hasBook() && service.currentPlayer.playbackState == Player.STATE_IDLE }
+    if (service.hasBook() && !failed) {
       withContext(Dispatchers.Main) { service.playPause() }
       return status()
     }
     return startMostRecent(service)
+  }
+
+  private fun volumeStep(): Int {
+    val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    return audio.getStreamVolume(AudioManager.STREAM_MUSIC)
   }
 
   /** One step of the media volume, the one the book plays on. The phone shows its own volume slider. */
@@ -156,6 +234,7 @@ class PebbleController(private val context: Context) {
   }
 
   private suspend fun skip(forward: Boolean): PebbleStatus {
+    currentTts()?.let { return ttsSkip(forward, it) }
     val service = player()
     if (service == null || !service.hasBook()) return status() // nothing is loaded: skipping has no meaning
     withContext(Dispatchers.Main) { if (forward) service.jumpForward() else service.jumpBackward() }
@@ -209,6 +288,7 @@ class PebbleController(private val context: Context) {
 
   private companion object {
     const val WAIT_SECONDS = 20
+    const val TTS_WAIT_SECONDS = 45
   }
 
   private fun error(message: String) = PebbleStatus(PebbleProtocol.STATE_ERROR, message)

@@ -67,7 +67,7 @@ class PebbleListenerService : BasePebbleListenerService() {
         // A command from the watch is answered by its own message; LOADING is followed by waitUntilPlaying
         if (status.state == PebbleProtocol.STATE_LOADING || starting) continue
         val progress = kotlin.math.abs(status.positionSeconds - before.positionSeconds) >= PROGRESS_STEP_SECONDS
-        if (status.state != before.state || status.title != before.title || status.chapter != before.chapter || progress) {
+        if (status.state != before.state || status.kind != before.kind || status.title != before.title || status.chapter != before.chapter || progress) {
           last = status
           sendStatus(status, watch)
         }
@@ -114,7 +114,9 @@ class PebbleListenerService : BasePebbleListenerService() {
       PebbleProtocol.KEY_POSITION to PebbleDictionaryItem.UInt32(status.positionSeconds.toUInt()),
       PebbleProtocol.KEY_DURATION to PebbleDictionaryItem.UInt32(status.durationSeconds.toUInt()),
       PebbleProtocol.KEY_CHAPTER_NUMBER to PebbleDictionaryItem.UInt16(status.chapterNumber.toUShort()),
-      PebbleProtocol.KEY_CHAPTER_COUNT to PebbleDictionaryItem.UInt16(status.chapterCount.toUShort())
+      PebbleProtocol.KEY_CHAPTER_COUNT to PebbleDictionaryItem.UInt16(status.chapterCount.toUShort()),
+      PebbleProtocol.KEY_KIND to PebbleDictionaryItem.UInt8(status.kind.toUByte()),
+      PebbleProtocol.KEY_VOLUME to PebbleDictionaryItem.UInt8(status.volume.toUByte())
     )
     val result = sender.sendDataToPebble(PebbleProtocol.WATCHAPP_UUID, message, listOf(watch))
     Log.d(tag, "Sent status ${status.state} '${status.title}' chapter ${status.chapterNumber}/${status.chapterCount} at ${status.positionSeconds}s: $result")

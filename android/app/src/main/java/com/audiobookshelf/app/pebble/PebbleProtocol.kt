@@ -18,6 +18,11 @@ object PebbleProtocol {
   const val KEY_DURATION = 5u // phone to watch (UInt32): length of the book in seconds
   const val KEY_CHAPTER_NUMBER = 6u // phone to watch (UInt16): 1 based, 0 when the book has no chapters
   const val KEY_CHAPTER_COUNT = 7u // phone to watch (UInt16)
+  const val KEY_KIND = 9u // phone to watch (UInt8): KIND_AUDIO or KIND_EPUB
+  const val KEY_VOLUME = 8u // phone to watch (UInt8): media volume step; the watch vibrates when it changes after a volume press
+
+  const val KIND_AUDIO = 0 // an audiobook: position and duration are seconds
+  const val KIND_EPUB = 1 // EPUB read aloud: position is the percentage in hundredths, duration is 10000
 
   // Commands from the watch
   const val CMD_HELLO = 0 // the watchapp was opened: tell it what is playing
