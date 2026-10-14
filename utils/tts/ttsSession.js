@@ -109,17 +109,22 @@ class TtsSession {
   }
 
   /** The stream of sentences is produced for the native queue. `startAtSpine` begins at a chapter start. */
-  createSender({ startCfi = null, startSpine = 0, startAtSpine = false }) {
+  createSender({ startCfi = null, startSpine = 0, startAtSpine = false, continueAfter = null }) {
     this.sender?.cancel()
     this.streamId++
     const signal = { cancelled: false }
     const historyCfis = new Set()
     const sender = new ChunkSender({
-      stream: sentenceStream(this.book, { startSpine, startCfi, startAtSpine, historyCfis, signal }),
+      stream: sentenceStream(this.book, {
+        startSpine, startCfi, startAtSpine, historyCfis, signal,
+        continueAfterCfi: continueAfter?.cfi, firstId: continueAfter ? continueAfter.id + 1 : 0
+      }),
       streamId: this.streamId,
       send: (chunk) => this.sendChunk(chunk),
-      onError: () => this.toast?.error(this.str('MessageTtsFailedToReadBook'))
+      onError: () => this.toast?.error(this.str('MessageTtsFailedToReadBook')),
+      expectStart: !continueAfter
     })
+    sender.continuing = !!continueAfter
     const cancel = sender.cancel.bind(sender)
     sender.cancel = () => {
       signal.cancelled = true
@@ -132,7 +137,7 @@ class TtsSession {
     this.index = []
     // Every section from here on is buffered whole once the forward stream has passed it. The start section
     // is only whole from its start position, its earlier part arrives with the earlier sections.
-    this.fullFrom = startCfi && !startAtSpine ? startSpine + 1 : startSpine
+    this.fullFrom = (startCfi && !startAtSpine) || continueAfter ? startSpine + 1 : startSpine
     return sender
   }
 
@@ -151,6 +156,8 @@ class TtsSession {
   async runSender(sender) {
     await sender.run()
     if (sender.cancelled) return
+    // A feeder that took over a running stream has no earlier text to add: the speech engine already holds it
+    if (sender.continuing) return
     const { streamId, signal, historyCfis } = sender
     try {
       for await (const block of earlierSections(this.book, { ...sender.position, historyCfis, signal })) {
@@ -315,7 +322,7 @@ class TtsSession {
     }
   }
 
-  async startSession({ book, startCfi, meta, bookFromReader }) {
+  async startSession({ book, startCfi, meta, bookFromReader, adopt = false }) {
     // A session restored after the app was closed has nothing running: start over it without stopping
     if (this.active && !this.store.state.tts.restored) await this.stop()
     this.bookFromReader = bookFromReader
@@ -374,6 +381,17 @@ class TtsSession {
         this.toast?.error(data.message || this.str('MessageTtsError'))
       })
     ]
+
+    if (adopt) {
+      // Take over the stream the hidden page is feeding: what the speech engine has queued keeps playing, no gap
+      const info = await AbsTts.adopt({ streamId: this.streamId + 1 })
+      if (info?.adopted) {
+        const continuing = this.createSender({ startSpine: info.spine, continueAfter: info })
+        this.store.commit('tts/setPlaying', !!info.playing)
+        this.runSender(continuing)
+        return
+      }
+    }
 
     const sender = this.createSender({ startCfi, startSpine: book.spine.get(startCfi)?.index || 0 })
 
@@ -465,13 +483,9 @@ class TtsSession {
       saved = null
     }
     // Reading that was last done without the app's screen (started from the Pebble watch) is saved natively only
-    let native = await AbsTts.getSnapshot().catch(() => null)
-    // The hidden reading was speaking when this screen opened: it stops and writes down where it got to, and this screen carries on
-    const resumePlaying = !!native?.resumePlaying
-    if (resumePlaying) {
-      await new Promise((resolve) => setTimeout(resolve, 1500)) // the hidden page writes its last position as it stops
-      native = (await AbsTts.getSnapshot().catch(() => null)) || native
-    }
+    const native = await AbsTts.getSnapshot().catch(() => null)
+    // The watch started the reading and it is still going in a hidden page: it must not stop when this screen opens
+    const headlessRunning = !!native?.headlessRunning
     if (native?.session) {
       try {
         const fromNative = JSON.parse(native.session)
@@ -482,11 +496,44 @@ class TtsSession {
     }
     if (this.active) return
     this.restoreFrom(saved)
-    if (resumePlaying && this.store.state.tts.restored) {
-      // A downloaded book can be opened at once; a book from the server needs the sign in to finish first
-      if (this.meta?.isLocal || this.store.state.user.user) this.resume()
-      else this.resumeWhenSignedIn = true
+    if (headlessRunning && this.store.state.tts.restored) {
+      const state = await AbsTts.getState().catch(() => null)
+      this.store.commit('tts/setPlaying', !!state?.playing)
+      this.adoptHeadless()
     }
+  }
+
+  /**
+   * The hidden page is reading (started from the watch) and this screen has just opened. The speech must not stop: keep it going from
+   * the hidden page while this opens the book (a book from the server needs the sign in first), then swap the feeder over to this
+   * page at a sentence boundary (see TtsController.adopt). If anything fails the hidden page simply carries on.
+   */
+  async adoptHeadless() {
+    const meta = this.meta
+    if (!meta || this.starting) return
+    this.starting = true
+    try {
+      if (!meta.isLocal) await this.waitForSignIn()
+      // The listener started something else in the meantime
+      if (!this.store.state.tts.restored || this.meta !== meta) return
+      const book = await this.openBook(meta)
+      await this.startSession({ book, startCfi: this.currentCfi, meta, bookFromReader: false, adopt: true })
+    } catch (error) {
+      console.error('[TtsSession] failed to take over the reading from the hidden page', error)
+    } finally {
+      this.starting = false
+    }
+  }
+
+  waitForSignIn() {
+    return new Promise((resolve) => {
+      const started = Date.now()
+      const check = () => {
+        if (this.store.state.user.user || Date.now() - started > 60000) return resolve()
+        setTimeout(check, 300)
+      }
+      check()
+    })
   }
 
   restoreFrom(saved) {
@@ -522,10 +569,6 @@ class TtsSession {
   checkRestoredOwner() {
     const m = this.meta
     const user = this.store.state.user.user
-    if (this.resumeWhenSignedIn && user) {
-      this.resumeWhenSignedIn = false
-      if (this.store.state.tts.restored && m && (!m.userId || user.id === m.userId)) return this.resume()
-    }
     if (!this.store.state.tts.restored || !m || !user || !m.userId || user.id === m.userId) return
     this.cleanup(false, true)
   }

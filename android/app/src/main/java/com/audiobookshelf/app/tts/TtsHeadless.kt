@@ -66,27 +66,21 @@ object TtsHeadless {
     }
   }
 
-  /** The hidden reading was speaking when the app's screen opened: the screen carries on reading instead of staying paused */
-  @Volatile private var resumeAfterHandOver = false
-
-  /** Asked once by the app's screen at start */
-  fun consumeResumeAfterHandOver(): Boolean {
-    val value = resumeAfterHandOver
-    resumeAfterHandOver = false
-    return value
-  }
-
   /** True while the hidden page is running a session */
   val isRunning get() = webView != null
 
   /** The app's screen is opening and takes over: write down where the reading is, stop it and let go of the page */
   fun handOver() {
     val view = webView ?: return
-    resumeAfterHandOver = TtsService.instance?.controller?.playing == true
     main.post {
       view.evaluateJavascript("ttsHeadless.handOver().catch(e => console.error('handOver failed: ' + e))", null)
       main.postDelayed({ shutdownNow() }, 2000)
     }
+  }
+
+  /** The app's screen has taken over the reading (see TtsController.adopt): the hidden page is no longer needed */
+  fun release() {
+    main.post { shutdownNow() }
   }
 
   private fun shutdownNow() {

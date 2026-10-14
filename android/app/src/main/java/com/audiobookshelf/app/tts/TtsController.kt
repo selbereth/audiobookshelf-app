@@ -400,6 +400,23 @@ class TtsController(private val context: Context) {
     return true
   }
 
+  /**
+   * Another feeder takes over without the speech stopping: what the engine already has queued stays (so there is no gap), the text
+   * not yet handed to the engine is dropped, and the new stream [newStreamId] continues after the last kept sentence.
+   * Returns that sentence (the new feeder starts right after it), or null when nothing is queued.
+   */
+  fun adopt(newStreamId: Int): TtsSentence? {
+    synchronized(lock) {
+      val keep = nextToQueue.coerceIn(0, store.size)
+      while (store.size > keep) positions.remove(store.removeAt(store.size - 1).id)
+      streamId = newStreamId
+      lastSeq = -1
+      streamDone = false
+      needMoreSentFor = -1
+      return store.lastOrNull()
+    }
+  }
+
   /** Clears the store for a new stream (seek to unreceived text) */
   fun reset(newStreamId: Int) {
     synchronized(lock) {

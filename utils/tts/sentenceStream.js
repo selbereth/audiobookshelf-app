@@ -197,6 +197,8 @@ async function* readSection(book, spineIndex, segmenter, options) {
  * @param {number} [opts.startSpine] spine index of the start location (the previous section is read too, for rewinding)
  * @param {boolean} [opts.startAtSpine] start at the first sentence of `startSpine` (chapter jump) instead of at a CFI
  * @param {string} [opts.startCfi] the sentence at or after this CFI is flagged `atStart`; up to HISTORY_SENTENCES before it are yielded first
+ * @param {string} [opts.continueAfterCfi] carry on after the sentence with this CFI (no history, no start flag): a new feeder taking over a stream
+ * @param {number} [opts.firstId] the id of the first sentence yielded (with `continueAfterCfi`: the id after the last one already sent)
  * @param {boolean} [opts.readFootnotes]
  * @param {Set<string>} [opts.historyCfis] filled with the CFIs of the history sentences that were yielded
  * @param {{cancelled:boolean}} [opts.signal]
@@ -205,9 +207,10 @@ async function* readSection(book, spineIndex, segmenter, options) {
 export async function* sentenceStream(book, opts = {}) {
   const options = { readFootnotes: !!opts.readFootnotes }
   const segmenter = getSegmenter(book.packaging?.metadata?.language)
-  let id = 0
+  let id = opts.firstId || 0
   const startSpine = opts.startSpine || 0
-  const hasStart = !!opts.startCfi || !!opts.startAtSpine
+  const continueAfter = opts.continueAfterCfi || null
+  const hasStart = !!opts.startCfi || !!opts.startAtSpine || !!continueAfter
   let pastStartCfi = !hasStart
   /** Sentences before the start location, held back until it is found */
   let history = []
@@ -218,12 +221,19 @@ export async function* sentenceStream(book, opts = {}) {
       if (opts.signal?.cancelled) return
       if (!pastStartCfi) {
         // Hold sentences back (as history) until we reach the one containing the start CFI
-        if (spineIndex < startSpine || (opts.startCfi && !isAtOrAfter(sentence.cfi, opts.startCfi))) {
+        if (spineIndex < startSpine || (opts.startCfi && !isAtOrAfter(sentence.cfi, opts.startCfi)) ||
+          (continueAfter && (sentence.cfi === continueAfter || !isAtOrAfter(sentence.cfi, continueAfter)))) {
           history.push(sentence)
           if (history.length > HISTORY_SENTENCES) history.shift()
           continue
         }
         pastStartCfi = true
+        if (continueAfter) {
+          // The text before this is already with the speech engine
+          history = []
+          yield { id: id++, ...sentence }
+          continue
+        }
         const held = history
         history = []
         for (const h of held) {
