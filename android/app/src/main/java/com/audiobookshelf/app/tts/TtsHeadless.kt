@@ -206,7 +206,8 @@ object TtsHeadless {
           context,
           TtsSnapshot(
             input.optString("libraryItemId"), input.optString("title"), input.optString("chapter"), input.optInt("chapterNumber"),
-            input.optInt("chapterCount"), input.optDouble("progress"), System.currentTimeMillis(), input.optString("session")
+            input.optInt("chapterCount"), input.optDouble("progress"), System.currentTimeMillis(), input.optString("session"),
+            input.optDouble("chapterStart", 0.0), input.optDouble("chapterEnd", 0.0)
           )
         )
         "clearSnapshot" -> TtsSnapshot.clear(context)

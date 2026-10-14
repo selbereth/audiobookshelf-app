@@ -436,6 +436,8 @@ class TtsSession {
       chapterNumber: chapter ? tts.currentChapterIndex + 1 : 0,
       chapterCount: tts.chapters.length,
       progress: tts.progress || 0,
+      chapterStart: tts.chapterStart || 0,
+      chapterEnd: tts.chapterEnd || 0,
       // Everything needed to open the book again without the app's screen (the Pebble watch starts it that way)
       session: JSON.stringify(saved)
     }).catch(() => {})

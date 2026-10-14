@@ -234,7 +234,9 @@ class AbsTts : Plugin() {
         call.getInt("chapterCount", 0) ?: 0,
         call.getDouble("progress") ?: 0.0,
         System.currentTimeMillis(),
-        call.getString("session") ?: ""
+        call.getString("session") ?: "",
+        call.getDouble("chapterStart") ?: 0.0,
+        call.getDouble("chapterEnd") ?: 0.0
       )
     )
     call.resolve()
