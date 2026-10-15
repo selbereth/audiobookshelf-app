@@ -71,6 +71,17 @@ export default {
       this.ttsFollowAlong = true
       this.attachTtsHandler()
       this.syncTtsOnResume()
+    },
+    /** Play pressed after the reader looked around while paused: back to the page being read */
+    ttsPlaying(playing) {
+      if (!playing || !this.ttsRunning || this.inittingDisplay || !this.rendition) return
+      this.ttsFollowAlong = true
+      const cfi = ttsSession.currentCfi
+      const loc = this.rendition.currentLocation()
+      if (cfi && !this.isTtsSentenceVisible(loc)) {
+        this.ttsIgnoreRelocatedUntil = Date.now() + 1500
+        this.rendition.display(cfi)
+      }
     }
   },
   computed: {
@@ -100,6 +111,10 @@ export default {
     },
     readerHeightOffset() {
       return this.isPlayerOpen ? 204 : 104
+    },
+    /** Read aloud is speaking (not paused): only then the reader is kept near the sentence being read */
+    ttsPlaying() {
+      return !!this.$store.state.tts.playing
     },
     /** Native read aloud is running for this book */
     ttsRunning() {
@@ -248,6 +263,8 @@ export default {
         const visible = compare.compare(cfi, loc.start.cfi) >= 0 && compare.compare(cfi, loc.end.cfi) <= 0
         if (visible) {
           this.ttsFollowAlong = true
+        } else if (!this.ttsPlaying) {
+          // Paused: the reader may be anywhere. Play brings them back (see the ttsPlaying watcher)
         } else if (this.ttsFollowAlong) {
           this.ttsIgnoreRelocatedUntil = Date.now() + 1500
           this.rendition.display(cfi)
@@ -417,7 +434,7 @@ export default {
     relocated(location) {
       console.log(`[EpubReader] relocated ${location.start.cfi}`)
       // A page turn the listener made while read aloud is running: stop pulling them back to the sentence being read
-      if (this.ttsRunning && !this.inittingDisplay && Date.now() > this.ttsIgnoreRelocatedUntil && !this.isTtsSentenceVisible(location)) {
+      if (this.ttsRunning && this.ttsPlaying && !this.inittingDisplay && Date.now() > this.ttsIgnoreRelocatedUntil && !this.isTtsSentenceVisible(location)) {
         // The listener moved to a page that does not have the sentence being read: stop pulling them back to it
         this.ttsFollowAlong = false
         // ...unless that is further than a page from it: the audio and the reader must not drift apart
