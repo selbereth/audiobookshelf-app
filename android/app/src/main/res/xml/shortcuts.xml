@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- The debug build has its own copy (src/debug/res/xml/shortcuts.xml): the package name has to be written out here, not read from a resource.
+       Long press on the app icon: does what the play button on the watch does (the most recent book, read aloud or audiobook) -->
+  <shortcut
+      android:shortcutId="play_most_recent"
+      android:enabled="true"
+      android:icon="@drawable/shortcut_play"
+      android:shortcutShortLabel="@string/shortcut_play_short"
+      android:shortcutLongLabel="@string/shortcut_play_long">
+    <intent
+        android:action="android.intent.action.VIEW"
+        android:targetPackage="com.selbereth.audiobookshelf"
+        android:targetClass="com.audiobookshelf.app.QuickPlayActivity" />
+  </shortcut>
+</shortcuts>

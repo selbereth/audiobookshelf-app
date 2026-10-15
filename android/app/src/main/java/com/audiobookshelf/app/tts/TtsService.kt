@@ -383,6 +383,8 @@ class TtsService : Service() {
 
   /** The app was swiped away: the JS side that feeds and displays this session is gone, so stop with it */
   override fun onTaskRemoved(rootIntent: Intent?) {
+    // The home screen shortcut's own short-lived task (QuickPlayActivity), not the user swiping the app away
+    if (com.audiobookshelf.app.QuickPlayActivity.isQuickPlayTask(rootIntent)) return super.onTaskRemoved(rootIntent)
     controller.pause()
     // "removed" lets the JS side keep the session so it can be offered again when the app is reopened
     requestStop("removed")
