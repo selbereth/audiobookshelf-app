@@ -2,6 +2,10 @@ import { CapacitorHttp } from '@capacitor/core'
 
 export default function ({ store, $db, $socket }, inject) {
   const nativeHttp = {
+    /** Refreshes in progress, by server connection config id */
+    refreshes: {},
+    loggingOut: null,
+
     async request(method, _url, data, options = {}) {
       // When authorizing before a config is set, server config gets passed in as an option
       let serverConnectionConfig = options.serverConnectionConfig || store.state.user.serverConnectionConfig
@@ -69,22 +73,13 @@ export default function ({ store, $db, $socket }, inject) {
           throw new Error('No server connection available')
         }
 
-        // Get refresh token from secure storage
-        const refreshToken = await $db.getRefreshToken(serverConnectionConfig.id)
-        if (!refreshToken) {
-          console.error('[nativeHttp] No refresh token available')
-          throw Object.assign(new Error('No refresh token available'), { sessionEnded: true })
-        }
+        // The token this request was sent with was replaced while it was on its way (another request refreshed it): just send it again
+        const sentToken = String(headers?.Authorization || '').replace(/^Bearer /, '')
+        const currentToken = store.getters['user/getToken']
+        let accessToken = currentToken && sentToken && currentToken !== sentToken ? currentToken : null
 
-        // Attempt to refresh the token. Null: the server rejected it. Throws: it could not be asked, which does not end the session
-        const newTokens = await this.refreshAccessToken(refreshToken, serverConnectionConfig.address)
-        if (!newTokens?.accessToken) {
-          console.error('[nativeHttp] The server rejected the refresh token')
-          throw Object.assign(new Error('Failed to refresh access token'), { sessionEnded: true })
-        }
-
-        // Update the store with new tokens
-        await this.updateTokens(newTokens, serverConnectionConfig)
+        // Otherwise refresh. Null: the server rejected the refresh token. Throws: it could not be asked, which does not end the session
+        if (!accessToken) accessToken = (await this.refreshTokensOnce(serverConnectionConfig)).accessToken
 
         // Retry the original request with the new token
         console.log('[nativeHttp] Retrying original request with new token...')
@@ -94,7 +89,7 @@ export default function ({ store, $db, $socket }, inject) {
           data,
           headers: {
             ...headers,
-            Authorization: `Bearer ${newTokens.accessToken}`
+            Authorization: `Bearer ${accessToken}`
           },
           ...options
         })
@@ -113,6 +108,38 @@ export default function ({ store, $db, $socket }, inject) {
         if (error?.sessionEnded) await this.handleRefreshFailure(serverConnectionConfig?.id)
         throw error
       }
+    },
+
+    /**
+     * One refresh at a time per server. A refresh token can be used once (the server replaces it with the next one), so when
+     * several requests get a 401 together (the app was away long enough for the access token to expire, then everything asks at once)
+     * each of them refreshing would have all but the first rejected, and that rejection logs the user out. They all wait for the one.
+     * @param {{ id: string, address: string }} serverConnectionConfig
+     * @returns {Promise<{accessToken: string, refreshToken: string}>}
+     */
+    refreshTokensOnce(serverConnectionConfig) {
+      const key = serverConnectionConfig.id
+      if (this.refreshes[key]) return this.refreshes[key]
+      const refresh = (async () => {
+        // Get refresh token from secure storage
+        const refreshToken = await $db.getRefreshToken(key)
+        if (!refreshToken) {
+          console.error('[nativeHttp] No refresh token available')
+          throw Object.assign(new Error('No refresh token available'), { sessionEnded: true })
+        }
+        const newTokens = await this.refreshAccessToken(refreshToken, serverConnectionConfig.address)
+        if (!newTokens?.accessToken) {
+          console.error('[nativeHttp] The server rejected the refresh token')
+          throw Object.assign(new Error('Failed to refresh access token'), { sessionEnded: true })
+        }
+        // Update the store with new tokens
+        await this.updateTokens(newTokens, serverConnectionConfig)
+        return newTokens
+      })()
+      this.refreshes[key] = refresh
+      const done = () => delete this.refreshes[key]
+      refresh.then(done, done)
+      return refresh
     },
 
     /**
@@ -211,7 +238,15 @@ export default function ({ store, $db, $socket }, inject) {
      * @param {string} [serverConnectionConfigId]
      * @returns {Promise} - Promise that resolves when logout is complete
      */
-    async handleRefreshFailure(serverConnectionConfigId) {
+    handleRefreshFailure(serverConnectionConfigId) {
+      // Several requests can fail on the same rejected refresh together: the user is logged out once
+      if (this.loggingOut) return this.loggingOut
+      this.loggingOut = this.logOutAfterRefreshFailure(serverConnectionConfigId)
+      setTimeout(() => (this.loggingOut = null), 5000)
+      return this.loggingOut
+    },
+
+    async logOutAfterRefreshFailure(serverConnectionConfigId) {
       try {
         console.log('[nativeHttp] Handling refresh failure - logging out user')
 
