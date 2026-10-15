@@ -102,6 +102,19 @@ class TtsController(private val context: Context) {
   /** Bumped by every stop: callbacks scheduled before it belong to speech that was cut off and do nothing */
   @Volatile private var fakeGen = 0
 
+  /**
+   * Bumped by every flush. Engines report a flushed utterance late (or as done), and a skip back queues the same sentence again:
+   * a callback of the old speech with the same sentence id would otherwise move the cursor past the sentence that was asked for.
+   */
+  @Volatile private var flushGen = 0
+  private fun utteranceKey(id: Int) = "$flushGen:$id"
+  /** The sentence id of a callback, or null when it belongs to speech that was flushed */
+  private fun sentenceIdOf(utteranceId: String?): Int? {
+    val parts = utteranceId?.split(':') ?: return null
+    if (parts.size != 2 || parts[0].toIntOrNull() != flushGen) return null
+    return parts[1].toIntOrNull()
+  }
+
   private fun fakeSpeak(s: TtsSentence) {
     val gen = fakeGen
     fakeHandler.post {
@@ -119,17 +132,17 @@ class TtsController(private val context: Context) {
     }
     val gen = fakeGen
     fakeSpeaking = true
-    progressListener.onStart(s.id.toString())
+    progressListener.onStart(utteranceKey(s.id))
     val ms = (s.text.length * 45 / rate).toLong().coerceAtLeast(400)
     // Report each word at the time it would be spoken, like a real engine does
     Regex("\\S+").findAll(s.text).forEach { word ->
       fakeHandler.postDelayed({
-        if (gen == fakeGen) progressListener.onRangeStart(s.id.toString(), word.range.first, word.range.last + 1, 0)
+        if (gen == fakeGen) progressListener.onRangeStart(utteranceKey(s.id), word.range.first, word.range.last + 1, 0)
       }, ms * word.range.first / s.text.length)
     }
     fakeHandler.postDelayed({
       if (gen != fakeGen) return@postDelayed
-      progressListener.onDone(s.id.toString())
+      progressListener.onDone(utteranceKey(s.id))
       fakeNext()
     }, ms)
   }
@@ -193,7 +206,7 @@ class TtsController(private val context: Context) {
 
   private val progressListener = object : UtteranceProgressListener() {
     override fun onStart(utteranceId: String?) {
-      val id = utteranceId?.toIntOrNull() ?: return
+      val id = sentenceIdOf(utteranceId) ?: return
       var sentence: TtsSentence? = null
       synchronized(lock) {
         // A callback for something that was flushed (skip, pause, seek) must not move the cursor back
@@ -209,14 +222,14 @@ class TtsController(private val context: Context) {
 
     // Android 8+: called as the engine reaches each word
     override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
-      val id = utteranceId?.toIntOrNull() ?: return
+      val id = sentenceIdOf(utteranceId) ?: return
       // Only for the sentence being spoken: a flushed one must not move the scroll
       val current = synchronized(lock) { queued.contains(id) }
       if (current) listener?.onWord(id, start, end)
     }
 
     override fun onDone(utteranceId: String?) {
-      val id = utteranceId?.toIntOrNull() ?: return
+      val id = sentenceIdOf(utteranceId) ?: return
       var ended = false
       var needMore = false
       var sleepNow = false
@@ -274,13 +287,14 @@ class TtsController(private val context: Context) {
       if (useFakeEngine) {
         fakeSpeak(s)
       } else {
-        engine?.speak(s.text, TextToSpeech.QUEUE_ADD, Bundle(), s.id.toString())
+        engine?.speak(s.text, TextToSpeech.QUEUE_ADD, Bundle(), utteranceKey(s.id))
       }
     }
   }
 
   /** Must be called with lock held */
   private fun flushEngine() {
+    flushGen++
     engine?.stop()
     if (useFakeEngine) fakeStop()
     queued.clear()
