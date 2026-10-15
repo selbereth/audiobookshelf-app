@@ -19,6 +19,10 @@ import { saveEbookProgress } from '@/utils/ebookProgress'
 const SYSTEM_BAR_CHANGE = 120
 const MAX_PAGES_FROM_AUDIO = 1 // while read aloud runs, the reader may be this many pages from the sentence being read; further is pulled back
 const PAGE_TURN_SETTLE_MS = 350
+// A position is only saved once the reader has stayed on it this long. While epub.js lays out the chapters around the one shown
+// it reports pages of the neighbouring chapters for a moment (a jump of 4 chapters was seen), and those must not become the saved position.
+const SAVE_LOCATION_SETTLE_MS = 1500
+const MAX_SETTLE_TRIES = 3 // snapping to a page the book cannot reach
 
 export default {
   props: {
@@ -51,6 +55,18 @@ export default {
       /** Where the reader is, set by the reader moving (not by the book being laid out again): the book is put back here after a resize */
       readingCfi: null,
       relayoutUntil: 0,
+      /** The position waiting to be saved (see SAVE_LOCATION_SETTLE_MS) */
+      saveLocationTimer: null,
+      pendingLocation: null,
+      /**
+       * The book was opened without a saved position (none yet, or the progress had not loaded): the page it opens at is the start
+       * of the book, not where the listener is, so it is not saved until they move (or the saved position arrives and takes them there)
+       */
+      holdStartSave: false,
+      startLocationCfi: null,
+      /** A page turn to the sentence being read is on its way: the latest sentence waits for it */
+      ttsDisplaying: false,
+      ttsPendingCfi: null,
       ttsIgnoreRelocatedUntil: 0, // page turns we made ourselves, and the ones that follow opening the book, are not the listener turning the page
       ereaderSettings: {
         theme: 'dark',
@@ -62,6 +78,16 @@ export default {
     }
   },
   watch: {
+    /** The saved position arrived after the book opened at its start (the progress had not loaded): go there, it is not a position to save over */
+    savedEbookLocation(cfi) {
+      if (!cfi || !this.holdStartSave || !this.rendition || this.inittingDisplay) return
+      if (this.startLocationCfi && this.currentLocationCfi !== this.startLocationCfi) return // the listener has moved on
+      if (!this.book?.spine?.get(cfi)) return
+      this.holdStartSave = false
+      this.currentLocationCfi = cfi
+      this.readingCfi = cfi
+      this.rendition.display(cfi)
+    },
     isPlayerOpen() {
       this.refreshUI()
     },
@@ -247,8 +273,34 @@ export default {
         this.ttsHighlightCfi = null
       }
     },
+    /**
+     * Turns to the sentence being read. While a page turn is on its way only the latest sentence is kept: coming back after a long
+     * time away the sentences arrive faster than the book can show them, and following each one scrolled through the whole stretch.
+     */
+    followTtsTo(cfi) {
+      this.ttsPendingCfi = cfi
+      if (this.ttsDisplaying) return
+      this.ttsDisplaying = true
+      const run = async () => {
+        while (this.ttsPendingCfi) {
+          const next = this.ttsPendingCfi
+          this.ttsPendingCfi = null
+          this.ttsIgnoreRelocatedUntil = Date.now() + 1500
+          try {
+            await this.rendition.display(next)
+          } catch (error) {
+            console.warn('[EpubReader] failed to follow the sentence', error)
+          }
+        }
+        this.ttsDisplaying = false
+      }
+      run()
+    },
     onTtsSentence({ cfi }) {
       if (!this.rendition || !cfi) return
+      // The app is in the background: nothing is on screen to turn or mark. The position of the sentence is taken once, when
+      // the app comes back (syncTtsOnResume)
+      if (document.hidden) return
       this.clearTtsHighlight()
       try {
         this.rendition.annotations.highlight(cfi, {}, null, 'tts-highlight', { fill: 'yellow', 'fill-opacity': '0.35', 'mix-blend-mode': 'normal' })
@@ -266,8 +318,7 @@ export default {
         } else if (!this.ttsPlaying) {
           // Paused: the reader may be anywhere. Play brings them back (see the ttsPlaying watcher)
         } else if (this.ttsFollowAlong) {
-          this.ttsIgnoreRelocatedUntil = Date.now() + 1500
-          this.rendition.display(cfi)
+          this.followTtsTo(cfi)
         } else if (this.ttsPageDistance(cfi, loc) > MAX_PAGES_FROM_AUDIO) {
           // The reader looked away and the audio has moved on until it is further away than a page: back to the audio
           this.returnToTtsPage(cfi)
@@ -453,23 +504,47 @@ export default {
       // again from it would move on from there every time the window changed size and came back
       if (Date.now() > this.relayoutUntil) this.readingCfi = location.start.cfi
 
-      if (this.currentLocationCfi === location.start.cfi) {
+      if (this.currentLocationCfi === location.start.cfi && !this.pendingLocation) {
         console.log(`[EpubReader] location already saved`, location.start.cfi)
         return
       }
+      this.pendingLocation = { cfi: location.start.cfi, percentage: location.end.percentage }
+      clearTimeout(this.saveLocationTimer)
+      this.saveLocationTimer = setTimeout(() => this.saveLocationNow(), SAVE_LOCATION_SETTLE_MS)
+    },
+    /**
+     * Saves where the reader is, once it has stayed there. The position is read again from epub.js at this point: whatever was
+     * reported on the way (see SAVE_LOCATION_SETTLE_MS) is not what is saved.
+     */
+    saveLocationNow() {
+      clearTimeout(this.saveLocationTimer)
+      const pending = this.pendingLocation
+      this.pendingLocation = null
+      if (!pending || this.inittingDisplay || !this.rendition) return
+      const live = this.rendition.currentLocation()
+      const cfi = live?.start?.cfi || pending.cfi
+      const percentage = live?.end?.percentage || pending.percentage
 
-      console.log(`[EpubReader] Saving new location ${location.start.cfi}`)
-      this.currentLocationCfi = location.start.cfi
+      if (this.holdStartSave) {
+        // Still on the page the book opened at without a saved position: nothing to save yet
+        if (!this.startLocationCfi) this.startLocationCfi = cfi
+        if (this.startLocationCfi === cfi) return
+        this.holdStartSave = false
+      }
+      if (this.currentLocationCfi === cfi) return
 
-      if (location.end.percentage) {
+      console.log(`[EpubReader] Saving new location ${cfi}`)
+      this.currentLocationCfi = cfi
+
+      if (percentage) {
         this.updateProgress({
-          ebookLocation: location.start.cfi,
-          ebookProgress: location.end.percentage
+          ebookLocation: cfi,
+          ebookProgress: percentage
         })
-        this.progress = Math.round(location.end.percentage * 100)
+        this.progress = Math.round(percentage * 100)
       } else {
         this.updateProgress({
-          ebookLocation: location.start.cfi
+          ebookLocation: cfi
         })
       }
     },
@@ -516,10 +591,16 @@ export default {
         let displayCfi = reader.book.locations.start
         if (this.savedEbookLocation && reader.book.spine.get(this.savedEbookLocation)) {
           displayCfi = this.savedEbookLocation
+        } else if (this.keepProgress) {
+          // No saved position: opening at the start of the book must not overwrite one that has not loaded yet
+          this.holdStartSave = true
         }
         // Read aloud is running for this book: open where it is reading now, not at the last saved position
         const ttsCfi = this.ttsActive ? ttsSession.currentCfi : null
-        if (ttsCfi && reader.book.spine.get(ttsCfi)) displayCfi = ttsCfi
+        if (ttsCfi && reader.book.spine.get(ttsCfi)) {
+          displayCfi = ttsCfi
+          this.holdStartSave = false
+        }
 
         reader.rendition.on('displayed', async () => {
           console.log('%c [EpubReader] Rendition displayed', 'color:blue;')
@@ -598,6 +679,8 @@ export default {
       this.scheduleResize()
     },
     onVisibilityChange() {
+      // Going to the background: the app may be closed without coming back, so the position waiting to be saved is saved now
+      if (document.hidden) this.saveLocationNow()
       // Coming back from the recents screen the window passes through a few sizes: wait for the final one
       if (!document.hidden) {
         this.scheduleResize()
@@ -662,6 +745,7 @@ export default {
         const { screenX, screenY } = e.touches[0]
         this.finishAnimation()
         this.touching = true
+        this.settleTarget = null
         if (this.startTouchX === undefined) {
           this.startTouchX = screenX
           this.startTouchY = screenY
@@ -716,7 +800,18 @@ export default {
           const width = pageWidth()
           const left = position()
           const nearest = Math.max(0, Math.round(left / width) * width)
-          if (Math.abs(left - nearest) > 1.5) this.animateTo(nearest)
+          if (Math.abs(left - nearest) <= 1.5) {
+            this.settleTries = 0
+            return
+          }
+          // A position the book cannot scroll to (past the end of what is laid out so far, while the next chapter is still loading) stays
+          // where it is however often it is asked: every try scrolls on every frame and reports a new location. Give up after a few.
+          if (this.settleTarget === nearest) this.settleTries++
+          else {
+            this.settleTarget = nearest
+            this.settleTries = 1
+          }
+          if (this.settleTries <= MAX_SETTLE_TRIES) this.animateTo(nearest)
         }, 160)
       }
 
@@ -781,6 +876,7 @@ export default {
   },
   beforeDestroy() {
     clearTimeout(this.resizeTimer)
+    this.saveLocationNow()
     // Read-aloud keeps playing after the reader is closed: the session owns the book
     if (this.ttsHandler) ttsSession.detachReader(this.ttsHandler)
     // Only the views are torn down: rendition.destroy() would clear rendition.book which epub.js hooks still use while the session reads
