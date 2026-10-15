@@ -94,38 +94,37 @@ export default function ({ $axios, store, $db }) {
       originalRequest._retry = true
       isRefreshing = true
 
+      let newAccessToken = null
       try {
-        // Attempt to refresh the token
-        // Updates store if successful, otherwise clears store and throw error
-        const newAccessToken = await store.dispatch('user/refreshToken')
-        if (!newAccessToken) {
-          console.error('No new access token received')
-          return Promise.reject(error)
-        }
-
-        // Update the original request with new token
-        if (!originalRequest.headers) {
-          originalRequest.headers = {}
-        }
-        originalRequest.headers['Authorization'] = `Bearer ${newAccessToken}`
-
-        // Process any queued requests
-        processQueue(null, newAccessToken)
-
-        // Retry the original request
-        return $axios(originalRequest)
+        // Updates the store if successful. Null: the server rejected the refresh token. Throws: it could not be asked (no network, server error)
+        newAccessToken = await store.dispatch('user/refreshToken')
       } catch (refreshError) {
-        console.error('Token refresh failed:', refreshError)
-
-        // Process queued requests with error
-        processQueue(refreshError, null)
-
-        await handleRefreshFailure(store.getters['user/getServerConnectionConfigId'])
-
-        return Promise.reject(refreshError)
-      } finally {
+        // The login is still good. Fail this request and keep the tokens, the next request tries again
+        console.error('Token refresh could not be completed, staying logged in:', refreshError)
         isRefreshing = false
+        processQueue(refreshError, null)
+        return Promise.reject(error)
       }
+      isRefreshing = false
+
+      if (!newAccessToken) {
+        // Only now the session is really over
+        processQueue(error, null)
+        await handleRefreshFailure(store.getters['user/getServerConnectionConfigId'])
+        return Promise.reject(error)
+      }
+
+      // Update the original request with new token
+      if (!originalRequest.headers) {
+        originalRequest.headers = {}
+      }
+      originalRequest.headers['Authorization'] = `Bearer ${newAccessToken}`
+
+      // Process any queued requests
+      processQueue(null, newAccessToken)
+
+      // Retry the original request. If it fails the token is still valid, so this never logs out
+      return $axios(originalRequest)
     }
 
     return Promise.reject(error)
