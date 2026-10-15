@@ -214,6 +214,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   // removing service when user swipe out our app
   override fun onTaskRemoved(rootIntent: Intent?) {
     super.onTaskRemoved(rootIntent)
+    // The home screen shortcut's own short-lived task (QuickPlayActivity), not the user swiping the app away
+    if (com.audiobookshelf.app.QuickPlayActivity.isQuickPlayTask(rootIntent)) return
     Log.d(tag, "onTaskRemoved")
 
     stopSelf()

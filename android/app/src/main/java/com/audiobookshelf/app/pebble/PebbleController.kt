@@ -174,6 +174,13 @@ class PebbleController(private val context: Context) {
     )
   }
 
+  /** Play the most recent book: what the home screen shortcut does. Never pauses: when it is already playing or starting nothing changes. */
+  suspend fun startPlaying(): PebbleStatus {
+    val now = status()
+    if (now.state == PebbleProtocol.STATE_PLAYING || now.state == PebbleProtocol.STATE_LOADING) return now
+    return handle(PebbleProtocol.CMD_PLAY_PAUSE)
+  }
+
   suspend fun handle(command: Int): PebbleStatus {
     return when (command) {
       PebbleProtocol.CMD_PLAY_PAUSE -> playPause()
