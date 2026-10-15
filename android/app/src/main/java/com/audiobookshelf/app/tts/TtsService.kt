@@ -127,7 +127,11 @@ class TtsService : Service() {
     }
     override fun onState(playing: Boolean, reason: String?) {
       mainHandler.post {
-        if (playing) acquireResources() else releaseResources()
+        // Paused because something else took the audio focus for a moment (a notification, a call): keep the focus request,
+        // or Android never tells us the focus is back and the speech stays paused. Any other pause ends that wait.
+        val waitingForFocus = !playing && reason == "focus" && resumeOnFocusGain
+        if (!playing && !waitingForFocus) resumeOnFocusGain = false
+        if (playing) acquireResources() else releaseResources(keepFocus = waitingForFocus)
         updateSession()
       }
       eventListener?.onState(playing, reason)
@@ -282,13 +286,13 @@ class TtsService : Service() {
     }
   }
 
-  private fun releaseResources() {
+  private fun releaseResources(keepFocus: Boolean = false) {
     if (wakeLock?.isHeld == true) wakeLock?.release()
     if (noisyRegistered) {
       unregisterReceiver(noisyReceiver)
       noisyRegistered = false
     }
-    focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+    if (!keepFocus) focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
   }
 
   private fun createChannel() {
