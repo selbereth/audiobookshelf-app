@@ -167,6 +167,10 @@ export const actions = {
     commit('libraries/setCurrentLibrary', null, { root: true })
     await AbsLogger.info({ tag: 'user', message: `Logged out from server ${state.serverConnectionConfig?.name || 'Not connected'}` })
   },
+  /**
+   * @returns {Promise<string|null>} the new access token, or null when the server rejected the refresh token (the session is over).
+   * Throws when the refresh could not be completed (no network, timeout, server error): the session is still good, so the caller must not log out.
+   */
   async refreshToken({ getters, commit, state }) {
     const refreshToken = await this.$db.getRefreshToken(getters.getServerConnectionConfigId)
     if (!refreshToken) {
@@ -185,15 +189,19 @@ export const actions = {
       data: {}
     })
 
+    if (response.status === 401 || response.status === 403) {
+      console.error('[user] Token refresh rejected by the server:', response.status)
+      return null
+    }
     if (response.status !== 200) {
       console.error('[user] Token refresh request failed:', response.status)
-      return null
+      throw new Error(`Token refresh failed with status ${response.status}`)
     }
 
     const userResponseData = response.data
-    if (!userResponseData.user?.accessToken) {
+    if (!userResponseData?.user?.accessToken) {
       console.error('[user] No access token in refresh response')
-      return null
+      throw new Error('No access token in refresh response')
     }
 
     // Update the config with new tokens

@@ -73,14 +73,14 @@ export default function ({ store, $db, $socket }, inject) {
         const refreshToken = await $db.getRefreshToken(serverConnectionConfig.id)
         if (!refreshToken) {
           console.error('[nativeHttp] No refresh token available')
-          throw new Error('No refresh token available')
+          throw Object.assign(new Error('No refresh token available'), { sessionEnded: true })
         }
 
-        // Attempt to refresh the token
+        // Attempt to refresh the token. Null: the server rejected it. Throws: it could not be asked, which does not end the session
         const newTokens = await this.refreshAccessToken(refreshToken, serverConnectionConfig.address)
         if (!newTokens?.accessToken) {
-          console.error('[nativeHttp] Failed to refresh access token')
-          throw new Error('Failed to refresh access token')
+          console.error('[nativeHttp] The server rejected the refresh token')
+          throw Object.assign(new Error('Failed to refresh access token'), { sessionEnded: true })
         }
 
         // Update the store with new tokens
@@ -109,8 +109,8 @@ export default function ({ store, $db, $socket }, inject) {
       } catch (error) {
         console.error('[nativeHttp] Token refresh failed:', error)
 
-        // If refresh fails, redirect to login
-        await this.handleRefreshFailure(serverConnectionConfig?.id)
+        // Only a refresh token the server rejected sends the user to login. A network or server error, or the retried request failing, keeps the session
+        if (error?.sessionEnded) await this.handleRefreshFailure(serverConnectionConfig?.id)
         throw error
       }
     },
@@ -138,15 +138,17 @@ export default function ({ store, $db, $socket }, inject) {
           data: {}
         })
 
-        if (response.status !== 200) {
-          console.error('[nativeHttp] Token refresh request failed:', response.status)
+        if (response.status === 401 || response.status === 403) {
+          console.error('[nativeHttp] Token refresh rejected by the server:', response.status)
           return null
+        }
+        if (response.status !== 200) {
+          throw new Error(`Token refresh failed with status ${response.status}`)
         }
 
         const userResponseData = response.data
-        if (!userResponseData.user?.accessToken) {
-          console.error('[nativeHttp] No access token in refresh response')
-          return null
+        if (!userResponseData?.user?.accessToken) {
+          throw new Error('No access token in refresh response')
         }
 
         console.log('[nativeHttp] Successfully refreshed access token')
@@ -157,7 +159,7 @@ export default function ({ store, $db, $socket }, inject) {
         }
       } catch (error) {
         console.error('[nativeHttp] Failed to refresh access token:', error)
-        return null
+        throw error
       }
     },
 
