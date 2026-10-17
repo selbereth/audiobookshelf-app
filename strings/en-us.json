@@ -298,6 +298,8 @@
   "LabelUsername": "Username",
   "LabelVeryHigh": "Very High",
   "LabelVeryLow": "Very Low",
+  "LabelVolumeBoost": "Volume boost",
+  "LabelVolumeBoostHelp": "Amplify playback past the device's maximum volume. Useful for quiet recordings, but high boost levels can distort audio that is already loud. Does not apply when casting.",
   "LabelYearReviewHide": "Hide Year in Review",
   "LabelYearReviewShow": "See Year in Review",
   "LabelYourBookmarks": "Your Bookmarks",

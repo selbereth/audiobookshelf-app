@@ -172,7 +172,8 @@ data class DeviceSettings(
         var downloadUsingCellular: DownloadUsingCellularSetting,
         var streamingUsingCellular: StreamingUsingCellularSetting,
         var androidAutoBrowseLimitForGrouping: Int,
-        var androidAutoBrowseSeriesSequenceOrder: AndroidAutoBrowseSeriesSequenceOrderSetting
+        var androidAutoBrowseSeriesSequenceOrder: AndroidAutoBrowseSeriesSequenceOrderSetting,
+        var volumeBoost: Int = 0 // Decibels of gain applied past max volume, 0 is off
 ) {
   companion object {
     // Static method to get default device settings
@@ -201,7 +202,8 @@ data class DeviceSettings(
               downloadUsingCellular = DownloadUsingCellularSetting.ALWAYS,
               streamingUsingCellular = StreamingUsingCellularSetting.ALWAYS,
               androidAutoBrowseLimitForGrouping = 100,
-              androidAutoBrowseSeriesSequenceOrder = AndroidAutoBrowseSeriesSequenceOrderSetting.ASC
+              androidAutoBrowseSeriesSequenceOrder = AndroidAutoBrowseSeriesSequenceOrderSetting.ASC,
+              volumeBoost = 0
       )
     }
   }

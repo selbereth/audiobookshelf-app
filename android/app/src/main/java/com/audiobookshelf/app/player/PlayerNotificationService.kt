@@ -110,6 +110,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   lateinit var mPlayer: ExoPlayer
   lateinit var currentPlayer: Player
   var castPlayer: CastPlayer? = null
+  private val volumeBoostManager = VolumeBoostManager()
 
   lateinit var sleepTimerManager: SleepTimerManager
   lateinit var mediaProgressSyncer: MediaProgressSyncer
@@ -203,6 +204,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
     playerNotificationManager.setPlayer(null)
     mPlayer.release()
+    volumeBoostManager.release()
     castPlayer?.release()
     mediaSession.release()
     mediaProgressSyncer.reset()
@@ -413,10 +415,22 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                     .build()
     mPlayer.setAudioAttributes(audioAttributes, true)
 
+    volumeBoostManager.setAudioSessionId(mPlayer.audioSessionId)
+    applyVolumeBoost()
+
     // attach player to playerNotificationManager
     playerNotificationManager.setPlayer(mPlayer)
 
     mediaSessionConnector.setPlayer(mPlayer)
+  }
+
+  fun onAudioSessionIdChanged(audioSessionId: Int) {
+    volumeBoostManager.setAudioSessionId(audioSessionId)
+  }
+
+  /** Applies the volume boost from device settings to the local player. */
+  fun applyVolumeBoost() {
+    volumeBoostManager.setBoost(deviceSettings.volumeBoost)
   }
 
   /*

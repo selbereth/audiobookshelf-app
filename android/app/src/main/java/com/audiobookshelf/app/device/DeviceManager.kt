@@ -89,6 +89,9 @@ object DeviceManager {
       deviceData.deviceSettings?.androidAutoBrowseSeriesSequenceOrder =
               AndroidAutoBrowseSeriesSequenceOrderSetting.ASC
     }
+    if (deviceData.deviceSettings?.volumeBoost == null) {
+      deviceData.deviceSettings?.volumeBoost = 0
+    }
   }
 
   /**

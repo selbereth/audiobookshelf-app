@@ -568,6 +568,7 @@ class AbsDatabase : Plugin() {
       // Updates playback actions for media notification (handles media control seek locking setting)
       if (mainActivity.isPlayerNotificationServiceInitialized()) {
         mainActivity.foregroundService.setMediaSessionConnectorPlaybackActions()
+        mainActivity.foregroundService.applyVolumeBoost()
       }
 
       call.resolve(JSObject(jacksonMapper.writeValueAsString(DeviceManager.deviceData)))
