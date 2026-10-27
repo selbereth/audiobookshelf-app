@@ -194,7 +194,9 @@ export default {
           color: `${fontColor}!important`,
           'background-color': `${backgroundColor}!important`,
           'line-height': this.ereaderSettings.lineSpacing + '%!important',
-          '-webkit-text-stroke': this.ereaderSettings.textStroke / 100 + 'px ' + fontColor + '!important'
+          '-webkit-text-stroke': this.ereaderSettings.textStroke / 100 + 'px ' + fontColor + '!important',
+          // A word (or link) longer than the page is broken at the page edge instead of running off the screen
+          'overflow-wrap': 'anywhere!important'
         },
         a: {
           color: `${fontColor}!important`
