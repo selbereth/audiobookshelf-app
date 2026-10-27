@@ -24,6 +24,39 @@ const PAGE_TURN_SETTLE_MS = 350
 const SAVE_LOCATION_SETTLE_MS = 1500
 const MAX_SETTLE_TRIES = 3 // snapping to a page the book cannot reach
 
+/** The first 4 bytes of a font file the browser can decode: TrueType, OpenType (CFF), TrueType collection, WOFF, WOFF2 */
+const FONT_SIGNATURES = ['\x00\x01\x00\x00', 'OTTO', 'true', 'ttcf', 'wOFF', 'wOF2']
+
+/**
+ * Some books carry fonts the browser cannot decode (obfuscated ones, which epub.js does not undo, or damaged files). Each one logs
+ * "Failed to decode downloaded font" twice every time a chapter is rendered. The @font-face rules of those fonts are left out of the
+ * book's CSS (the page shows the fallback font, as it did anyway); fonts that decode are kept.
+ */
+function dropUndecodableFonts(book) {
+  book.loaded.resources.then(() => {
+    const archive = book.archive
+    if (!archive?.zip) return
+    const fontFiles = book.resources.assets.filter((asset) => /font|opentype|\.(otf|ttf|woff2?)$/i.test(asset.type + asset.href))
+    const badFonts = Promise.all(
+      fontFiles.map(async (asset) => {
+        const entry = archive.zip.file(decodeURIComponent(book.resolve(asset.href).substr(1)))
+        if (!entry) return null
+        const head = String.fromCharCode(...(await entry.async('uint8array')).slice(0, 4))
+        return FONT_SIGNATURES.includes(head) ? null : asset.href.split('/').pop()
+      })
+    ).then((names) => names.filter(Boolean))
+    const getText = archive.getText.bind(archive)
+    archive.getText = (url, encoding) => {
+      const text = getText(url, encoding)
+      if (!text || !/\.css$/i.test(url)) return text
+      return Promise.all([text, badFonts]).then(([css, names]) => {
+        if (!names.length) return css
+        return css.replace(/@font-face\s*\{[^}]*\}/gi, (rule) => (names.some((name) => rule.includes(name) || rule.includes(encodeURIComponent(name))) ? '' : rule))
+      })
+    }
+  })
+}
+
 export default {
   props: {
     url: String,
@@ -574,6 +607,7 @@ export default {
         openAs: 'epub',
         requestMethod: this.isLocal ? null : customRequest
       })
+      dropUndecodableFonts(reader.book)
 
       /** @type {ePub.Rendition} */
       this.appliedSize = { width: window.innerWidth, height: window.innerHeight - this.readerHeightOffset }
