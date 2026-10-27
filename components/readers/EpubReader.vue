@@ -719,9 +719,9 @@ export default {
       snap.animateTo = function (left) {
         if (this.animFrame !== null) cancelAnimationFrame(this.animFrame)
         this.animFrame = null
-        const from = position()
+        this.animFrom = position()
         this.targetLeft = left
-        if (Math.abs(left - from) < 1) {
+        if (Math.abs(left - this.animFrom) < 1) {
           this.scrollTo(left, 0)
           this.snapping = false
           return
@@ -730,7 +730,7 @@ export default {
         const started = this.now()
         const tick = () => {
           const t = Math.min(1, (this.now() - started) / DURATION)
-          this.scrollTo(from + (left - from) * ease(t), 0)
+          this.scrollTo(this.animFrom + (this.targetLeft - this.animFrom) * ease(t), 0)
           if (t < 1) {
             this.animFrame = requestAnimationFrame(tick)
           } else {
@@ -739,6 +739,28 @@ export default {
           }
         }
         tick()
+      }
+
+      // epub.js moves the scroll position when it takes a chapter out (erase) or a chapter changes size (counter), to keep the same text
+      // on screen. A turn in progress (the page it started on, where the animation is going) has to move by the same amount, or the book
+      // shivers and ends up pages away from the one asked for.
+      snap.rebase = function (delta) {
+        if (!delta) return
+        if (this.startPage !== null) this.startPage += Math.round(delta / pageWidth())
+        if (this.animFrame !== null) {
+          this.animFrom += delta
+          this.targetLeft += delta
+        }
+        if (this.settleTarget != null) this.settleTarget += delta
+      }
+      for (const name of ['erase', 'counter']) {
+        const original = snap.manager[name].bind(snap.manager)
+        snap.manager[name] = (...args) => {
+          const before = position()
+          const result = original(...args)
+          snap.rebase(position() - before)
+          return result
+        }
       }
 
       snap.onTouchStart = function (e) {
