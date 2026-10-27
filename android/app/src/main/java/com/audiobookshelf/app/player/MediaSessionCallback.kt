@@ -35,6 +35,9 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
 
   override fun onPlay() {
     Log.d(tag, "ON PLAY MEDIA SESSION COMPAT")
+    // Read-aloud (TTS) owns playback while its service is alive
+    val tts = com.audiobookshelf.app.tts.TtsService.instance
+    if (tts != null) return tts.startPlayback()
     playerNotificationService.play()
   }
 
@@ -61,26 +64,40 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
 
   override fun onPause() {
     Log.d(tag, "ON PAUSE MEDIA SESSION COMPAT")
+    val tts = com.audiobookshelf.app.tts.TtsService.instance
+    if (tts != null) return tts.controller.pause()
     playerNotificationService.pause()
   }
 
+  /** While read aloud owns playback the transport buttons are for it, not for the (paused) audiobook */
+  private fun readAloudKey(keyCode: Int): Boolean {
+    val tts = com.audiobookshelf.app.tts.TtsService.instance ?: return false
+    tts.handleMediaKey(keyCode)
+    return true
+  }
+
   override fun onStop() {
+    if (readAloudKey(KeyEvent.KEYCODE_MEDIA_STOP)) return
     playerNotificationService.pause()
   }
 
   override fun onSkipToPrevious() {
+    if (readAloudKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)) return
     playerNotificationService.skipToPrevious()
   }
 
   override fun onSkipToNext() {
+    if (readAloudKey(KeyEvent.KEYCODE_MEDIA_NEXT)) return
     playerNotificationService.skipToNext()
   }
 
   override fun onFastForward() {
+    if (readAloudKey(KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)) return
     playerNotificationService.jumpForward()
   }
 
   override fun onRewind() {
+    if (readAloudKey(KeyEvent.KEYCODE_MEDIA_REWIND)) return
     playerNotificationService.jumpBackward()
   }
 
@@ -158,6 +175,13 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
       }
 
       Log.d(tag, "handleCallMediaButton keyEvent = $keyEvent | action ${keyEvent?.action}")
+
+      // While read-aloud (TTS) owns playback it handles the media buttons
+      val tts = com.audiobookshelf.app.tts.TtsService.instance
+      if (tts != null) {
+        if (keyEvent?.action == KeyEvent.ACTION_DOWN) tts.handleMediaKey(keyEvent.keyCode)
+        return true
+      }
 
       // Widget button intent is only sending the action down event
       if (keyEvent?.action == KeyEvent.ACTION_DOWN) {

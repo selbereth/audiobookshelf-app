@@ -29,18 +29,19 @@ android {
     buildConfig true
   }
   kotlinOptions {
-    freeCompilerArgs = ['-Xjvm-default=all']
+    // -Xskip-metadata-version-check: the PebbleKit client (see the Pebble line in dependencies) is built with a newer Kotlin than this project
+    freeCompilerArgs = ['-Xjvm-default=all', '-Xskip-metadata-version-check']
   }
   compileSdk rootProject.ext.compileSdkVersion
   defaultConfig {
-    applicationId "com.audiobookshelf.app"
+    applicationId "com.selbereth.audiobookshelf"
     minSdkVersion rootProject.ext.minSdkVersion
     targetSdkVersion rootProject.ext.targetSdkVersion
     versionCode 121
     versionName "0.14.2-beta"
     testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     manifestPlaceholders = [
-      "appAuthRedirectScheme": "com.audiobookshelf.app"
+      "appAuthRedirectScheme": "com.selbereth.audiobookshelf"
     ]
     aaptOptions {
       // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -128,6 +129,10 @@ dependencies {
 
   // Jackson for JSON
   implementation 'com.fasterxml.jackson.module:jackson-module-kotlin:2.12.2'
+
+  // Pebble smartwatch: receive commands from the watchapp and send it what is playing (see `pebble/`).
+  // 1.3.0 and later need compileSdk 37 and a newer Android Gradle plugin than this project uses.
+  implementation 'io.rebble.pebblekit2:client:1.2.0'
 }
 
 apply from: 'capacitor.build.gradle'

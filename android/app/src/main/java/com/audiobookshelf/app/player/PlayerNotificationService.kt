@@ -214,6 +214,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   // removing service when user swipe out our app
   override fun onTaskRemoved(rootIntent: Intent?) {
     super.onTaskRemoved(rootIntent)
+    // The home screen shortcut's own short-lived task (QuickPlayActivity), not the user swiping the app away
+    if (com.audiobookshelf.app.QuickPlayActivity.isQuickPlayTask(rootIntent)) return
     Log.d(tag, "onTaskRemoved")
 
     stopSelf()
@@ -425,6 +427,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           playWhenReady: Boolean,
           playbackRate: Float?
   ) {
+    com.audiobookshelf.app.tts.TtsService.requestStop()
     if (!isStarted) {
       Log.i(tag, "preparePlayer: foreground service not started - Starting service --")
       Intent(ctx, PlayerNotificationService::class.java).also { intent ->
@@ -948,6 +951,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   }
 
   fun play() {
+    // Only one thing owns media playback
+    com.audiobookshelf.app.tts.TtsService.requestStop()
     if (currentPlayer.isPlaying) {
       Log.d(tag, "Already playing")
       return
@@ -1130,6 +1135,8 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
           mutableListOf(
                   "com.audiobookshelf.app",
                   "com.audiobookshelf.app.debug",
+                  "com.selbereth.audiobookshelf",
+                  "com.selbereth.audiobookshelf.debug",
                   ANDROID_AUTO_PKG_NAME,
                   ANDROID_AUTO_SIMULATOR_PKG_NAME,
                   ANDROID_WEARABLE_PKG_NAME,

@@ -73,6 +73,9 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
 
+            <!-- The long press menu of the app icon (a "Play" action, see QuickPlayActivity) -->
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
+
             <!-- Register URL scheme -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -83,6 +86,15 @@
                 <data android:scheme="@string/custom_url_scheme" />
             </intent-filter>
         </activity>
+
+        <!-- Starts the most recent book without opening the app: the "Play" action of the app icon's long press menu -->
+        <activity
+            android:name=".QuickPlayActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <receiver android:name="androidx.media.session.MediaButtonReceiver" android:exported="true">
             <intent-filter>
@@ -101,6 +113,12 @@
         </service>
 
         <service
+            android:name=".tts.TtsService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <service
             android:name=".services.DownloadService"
             android:enabled="true"
             android:exported="false"
@@ -115,6 +133,16 @@
             android:name="android.support.FILE_PROVIDER_PATHS"
             android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- The Pebble app binds to this when the Pebble watchapp (`pebble/`) is opened, starting this app's process if needed -->
+        <service
+            android:name=".pebble.PebbleListenerService"
+            android:exported="true"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="io.rebble.pebblekit2.RECEIVE_DATA_FROM_WATCH" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>

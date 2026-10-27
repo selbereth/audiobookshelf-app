@@ -12,10 +12,10 @@
           <div>
             <p class="text-fg-muted text-sm">{{ $strings.LabelChapters }}</p>
           </div>
-          <div class="text-right" style="min-width: 60px">
+          <div v-if="hasTimes" class="text-right" style="min-width: 60px">
             <p class="text-fg-muted text-sm" style="letter-spacing: -0.5px">{{ $strings.LabelStart }}</p>
           </div>
-          <div class="text-right" style="min-width: 60px">
+          <div v-if="hasTimes" class="text-right" style="min-width: 60px">
             <p class="text-fg-muted text-sm" style="letter-spacing: -0.5px">{{ $strings.LabelDuration }}</p>
           </div>
         </div>
@@ -23,10 +23,10 @@
           <li v-for="chapter in chapters" :key="chapter.id" :id="`chapter-row-${chapter.id}`" class="text-fg select-none relative cursor-pointer" :class="currentChapterId === chapter.id ? 'bg-primary bg-opacity-80' : ''" role="option" @click="clickedOption(chapter)">
             <div class="grid grid-cols-[1fr_auto_auto] gap-2 px-3 py-3 items-start">
               <p class="font-normal line-clamp-2 text-sm text-fg/80">{{ chapter.title }}</p>
-              <div class="text-right" style="min-width: 60px">
+              <div v-if="hasTimes" class="text-right" style="min-width: 60px">
                 <span class="font-mono text-fg-muted text-sm" style="letter-spacing: -0.5px">{{ $secondsToTimestamp(chapter.start / _playbackRate) }}</span>
               </div>
-              <div class="text-right" style="min-width: 60px">
+              <div v-if="hasTimes" class="text-right" style="min-width: 60px">
                 <span class="font-mono text-fg-muted text-sm" style="letter-spacing: -0.5px">{{ $secondsToTimestamp(Math.max(0, chapter.end - chapter.start) / _playbackRate) }}</span>
               </div>
             </div>
@@ -66,6 +66,10 @@ export default {
     }
   },
   computed: {
+    /** EPUB read-aloud chapters have no start time or duration */
+    hasTimes() {
+      return this.chapters.length && this.chapters[0].start != null
+    },
     show: {
       get() {
         return this.value

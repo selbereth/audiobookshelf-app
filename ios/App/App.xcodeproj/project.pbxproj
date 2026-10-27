@@ -27,6 +27,7 @@
 		4DABC04F2B0139CA000F6264 /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DABC04E2B0139CA000F6264 /* User.swift */; };
 		4DB441E12E19B8BF0056C8F1 /* SecureStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DB441E02E19B8BF0056C8F1 /* SecureStorage.swift */; };
 		4DF6C7172DB58ABF004059F1 /* AbsLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DF6C7162DB58ABF004059F1 /* AbsLogger.swift */; };
+		A1B2C3D42F00000100TTS001 /* AbsTts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D42F00000200TTS002 /* AbsTts.swift */; };
 		4DF74912287105C600AC7814 /* DeviceSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DF74911287105C600AC7814 /* DeviceSettings.swift */; };
 		4DFE2DA32D345C390000B204 /* MyViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DFE2DA22D345C390000B204 /* MyViewController.swift */; };
 		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
@@ -102,6 +103,7 @@
 		4DABC04E2B0139CA000F6264 /* User.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = User.swift; sourceTree = "<group>"; };
 		4DB441E02E19B8BF0056C8F1 /* SecureStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureStorage.swift; sourceTree = "<group>"; };
 		4DF6C7162DB58ABF004059F1 /* AbsLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbsLogger.swift; sourceTree = "<group>"; };
+		A1B2C3D42F00000200TTS002 /* AbsTts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbsTts.swift; sourceTree = "<group>"; };
 		4DF74911287105C600AC7814 /* DeviceSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSettings.swift; sourceTree = "<group>"; };
 		4DFE2DA22D345C390000B204 /* MyViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyViewController.swift; sourceTree = "<group>"; };
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
@@ -219,6 +221,7 @@
 				4D66B953282EE87C008272D4 /* AbsDownloader.swift */,
 				4D66B957282EEA14008272D4 /* AbsFileSystem.swift */,
 				4DF6C7162DB58ABF004059F1 /* AbsLogger.swift */,
+				A1B2C3D42F00000200TTS002 /* AbsTts.swift */,
 			);
 			path = plugins;
 			sourceTree = "<group>";
@@ -543,6 +546,7 @@
 				E9D5504C28AC1AE000C746DD /* PodcastEpisode.swift in Sources */,
 				E9D5506A28AC1DF100C746DD /* LocalFile.swift in Sources */,
 				4DF6C7172DB58ABF004059F1 /* AbsLogger.swift in Sources */,
+				A1B2C3D42F00000100TTS001 /* AbsTts.swift in Sources */,
 				3AF1970E2806E3CA0096F747 /* AbsAudioPlayer.swift in Sources */,
 				E9D5506F28AC1E8E00C746DD /* DownloadItem.swift in Sources */,
 				3AD4FCE928043FD7006DB301 /* ServerConnectionConfig.swift in Sources */,
@@ -747,7 +751,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				MARKETING_VERSION = 0.14.2;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
-				PRODUCT_BUNDLE_IDENTIFIER = com.audiobookshelf.app.dev;
+				PRODUCT_BUNDLE_IDENTIFIER = com.selbereth.audiobookshelf.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OBJC_BRIDGING_HEADER = "App/App-Bridging-Header.h";
@@ -770,7 +774,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				MARKETING_VERSION = 0.14.2;
-				PRODUCT_BUNDLE_IDENTIFIER = com.audiobookshelf.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.selbereth.audiobookshelf;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
 				SWIFT_OBJC_BRIDGING_HEADER = "App/App-Bridging-Header.h";
@@ -792,7 +796,7 @@
 				MARKETING_VERSION = 1.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = com.audiobookshelf.AudiobookshelfUnitTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.selbereth.AudiobookshelfUnitTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
@@ -813,7 +817,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.0;
 				MTL_FAST_MATH = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = com.audiobookshelf.AudiobookshelfUnitTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.selbereth.AudiobookshelfUnitTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
