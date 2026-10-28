@@ -12,6 +12,7 @@
 
 <script>
 import { AbsTts } from '@/plugins/capacitor'
+import { KeepAwake } from '@capacitor-community/keep-awake'
 
 const BEFORE = 10 // sentences kept above the current one: the previous ones stay on screen while the current one is mid-card
 const AFTER = 50 // sentences after it: more than fit on any screen
@@ -51,6 +52,10 @@ export default {
   watch: {
     currentId() {
       this.onSentenceChange()
+      this.updateKeepAwake()
+    },
+    'tts.playing'() {
+      this.updateKeepAwake()
     },
     'tts.wordAt'() {
       this.onWord()
@@ -160,17 +165,26 @@ export default {
       }
       list.style.transform = `translate3d(0, ${-this.y}px, 0)`
     },
+    /** The text scrolls by itself while the voice speaks, so the screen must not turn off then. Asked again on every sentence:
+     *  closing the reader lets the screen sleep, which must not outlast the text that is still moving. */
+    updateKeepAwake() {
+      // While the reader is open it keeps the screen on itself
+      const call = this.tts.playing || this.$store.state.showReader ? KeepAwake.keepAwake() : KeepAwake.allowSleep()
+      call.catch((error) => console.error('[ReadAloudText] failed to set keep awake', error))
+    },
     onResize() {
       this.$nextTick(() => this.measure())
     }
   },
   mounted() {
     this.load()
+    this.updateKeepAwake()
     this.raf = requestAnimationFrame(this.frame)
     window.addEventListener('resize', this.onResize)
   },
   beforeDestroy() {
     cancelAnimationFrame(this.raf)
+    if (!this.$store.state.showReader) KeepAwake.allowSleep().catch((error) => console.error('[ReadAloudText] failed to allow sleep', error))
     window.removeEventListener('resize', this.onResize)
   }
 }
