@@ -57,6 +57,10 @@ export default {
     'tts.playing'() {
       this.updateKeepAwake()
     },
+    '$store.state.showReader'() {
+      // The page view closing lets the screen sleep: the scrolling reader asks again once it has
+      this.$nextTick(() => this.updateKeepAwake())
+    },
     'tts.wordAt'() {
       this.onWord()
     },
@@ -165,10 +169,12 @@ export default {
       }
       list.style.transform = `translate3d(0, ${-this.y}px, 0)`
     },
-    /** The text scrolls by itself while the voice speaks, so the screen must not turn off then. Asked again on every sentence:
-     *  closing the reader lets the screen sleep, which must not outlast the text that is still moving. */
+    /** The scrolling reader (this view) keeps the screen on only while the voice speaks, since the text scrolls by itself then.
+     *  The page view (the epub `Reader`) keeps it on whenever it is open, playing or not, so it wins. Asked again on every
+     *  sentence: closing the page view lets the screen sleep, which must not outlast a scrolling reader that is still moving. */
     updateKeepAwake() {
-      const call = this.tts.playing ? KeepAwake.keepAwake() : KeepAwake.allowSleep()
+      const awake = this.$store.state.showReader || this.tts.playing
+      const call = awake ? KeepAwake.keepAwake() : KeepAwake.allowSleep()
       call.catch((error) => console.error('[ReadAloudText] failed to set keep awake', error))
     },
     onResize() {
@@ -183,6 +189,7 @@ export default {
   },
   beforeDestroy() {
     cancelAnimationFrame(this.raf)
+    // Leaving the scrolling reader: the page view, if open, keeps its own
     if (!this.$store.state.showReader) KeepAwake.allowSleep().catch((error) => console.error('[ReadAloudText] failed to allow sleep', error))
     window.removeEventListener('resize', this.onResize)
   }
