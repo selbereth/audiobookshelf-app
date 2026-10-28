@@ -168,8 +168,7 @@ export default {
     /** The text scrolls by itself while the voice speaks, so the screen must not turn off then. Asked again on every sentence:
      *  closing the reader lets the screen sleep, which must not outlast the text that is still moving. */
     updateKeepAwake() {
-      // While the reader is open it keeps the screen on itself
-      const call = this.tts.playing || this.$store.state.showReader ? KeepAwake.keepAwake() : KeepAwake.allowSleep()
+      const call = this.tts.playing ? KeepAwake.keepAwake() : KeepAwake.allowSleep()
       call.catch((error) => console.error('[ReadAloudText] failed to set keep awake', error))
     },
     onResize() {
