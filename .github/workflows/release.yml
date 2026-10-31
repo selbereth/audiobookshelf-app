@@ -1,0 +1,59 @@
+name: Release APK
+
+on:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - 'ios/**'
+      - 'readme.md'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v3
+
+      - name: use Node.js 20.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+
+      - name: Set up Java
+        uses: actions/setup-java@v2
+        with:
+          distribution: 'temurin'
+          java-version: 21
+
+      - name: install dependencies
+        run: npm ci --omit=optional
+
+      - name: build Nuxt project
+        run: npm run generate
+
+      - name: copy to Android project
+        run: npx cap sync
+
+      - name: build Android app
+        run: ./android/gradlew assembleDebug -p android --no-daemon
+
+      - name: rename apk
+        working-directory: android/app/build/outputs/apk/debug/
+        run: |
+          version="$(node -p "require('${GITHUB_WORKSPACE}/package.json').version")"
+          echo "TAG=v${version}-build.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          mv -v app-debug.apk "audiobookshelf-${version}-build.${GITHUB_RUN_NUMBER}.apk"
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${TAG}" android/app/build/outputs/apk/debug/*.apk \
+            --target "${GITHUB_SHA}" \
+            --title "${TAG}" \
+            --generate-notes \
+            --prerelease
