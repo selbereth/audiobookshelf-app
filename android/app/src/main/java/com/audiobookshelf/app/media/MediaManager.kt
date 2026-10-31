@@ -138,6 +138,7 @@ class MediaManager(private var apiHandler: ApiHandler, var ctx: Context) {
         val userSettings = JSONObject()
         userSettings.put("playbackRate", newRate.toString().toDouble())
         sharedPrefEditor.putString("userSettings", userSettings.toString())
+        sharedPrefEditor.apply()
         userSettingsPlaybackRate = newRate
         Log.d(tag, "Created and saved userSettings JSON from Android Auto with playbackRate=$newRate")
       }

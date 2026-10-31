@@ -28,6 +28,26 @@ class TtsController(private val context: Context) {
     fun onSleepTimer(remainingMs: Long, running: Boolean, atChapterEnd: Boolean) {}
     /** The engine is speaking characters [start, end) of sentence [id] (used to scroll the text along with the voice) */
     fun onWord(id: Int, start: Int, end: Int) {}
+    /** The reading speed was changed (by the app's screen, the Pebble watch or anything else) */
+    fun onRate(rate: Float) {}
+  }
+
+  companion object {
+    private const val RATE_PREFS = "tts_prefs"
+
+    /** The saved reading speed, 0 when it was never set. The one place the speed is kept: the web part and the watch both read it. */
+    fun savedRate(context: Context): Float = context.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE).getFloat("rate", 0f)
+
+    fun saveRate(context: Context, rate: Float) {
+      context.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE).edit().putFloat("rate", rate).apply()
+    }
+  }
+
+  /** The one way to change the reading speed: saves it, applies it to the voice and tells the app's screen */
+  fun changeRate(newRate: Float) {
+    saveRate(context, newRate)
+    updateVoice(newRate = newRate)
+    listener?.onRate(newRate)
   }
 
   private val tag = "TtsController"

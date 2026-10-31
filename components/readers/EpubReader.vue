@@ -12,7 +12,7 @@
 
 <script>
 import ePub from 'epubjs'
-import ttsSession from '@/utils/tts/ttsSession'
+import ttsSession, { ebookMeta } from '@/utils/tts/ttsSession'
 import { saveEbookProgress } from '@/utils/ebookProgress'
 
 /** The status bar and navigation bar showing or hiding changes the window height by less than this */
@@ -225,7 +225,7 @@ export default {
         book: this.book,
         bookFromReader: true,
         startCfi,
-        meta: {
+        meta: ebookMeta({
           libraryItem: this.libraryItem,
           localLibraryItem: this.localLibraryItem,
           url: this.url,
@@ -234,7 +234,7 @@ export default {
           localLibraryItemId: this.localLibraryItemId,
           keepProgress: this.keepProgress,
           progress: this.progress
-        }
+        })
       })
     },
     attachTtsHandler() {

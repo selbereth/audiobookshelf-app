@@ -42,6 +42,9 @@ class AbsTts : Plugin() {
     override fun onSleepTimer(remainingMs: Long, running: Boolean, atChapterEnd: Boolean) {
       notifyListeners("sleepTimer", JSObject().put("remainingMs", remainingMs).put("running", running).put("atChapterEnd", atChapterEnd))
     }
+    override fun onRate(rate: Float) {
+      notifyListeners("rate", JSObject().put("rate", rate.toString().toDouble()))
+    }
     override fun onError(code: String, message: String) {
       notifyListeners("error", JSObject().put("code", code).put("message", message))
     }
@@ -185,8 +188,14 @@ class AbsTts : Plugin() {
 
   @PluginMethod
   fun setRate(call: PluginCall) {
-    svc?.controller?.updateVoice(newRate = call.getFloat("rate", 1f))
+    val rate = call.getFloat("rate", 1f) ?: 1f
+    svc?.controller?.changeRate(rate) ?: TtsController.saveRate(context, rate)
     call.resolve()
+  }
+
+  @PluginMethod
+  fun getRate(call: PluginCall) {
+    call.resolve(JSObject().put("rate", TtsController.savedRate(context).toString().toDouble()))
   }
 
   @PluginMethod

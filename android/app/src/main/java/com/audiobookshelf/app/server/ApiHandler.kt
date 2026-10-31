@@ -198,6 +198,7 @@ class ApiHandler(var ctx:Context) {
   fun refreshAuthTokens(
           serverConnectionConfigId: String,
           httpClient: OkHttpClient? = null,
+          retriesLeft: Int = 2,
           onResult: (RefreshResult) -> Unit
   ) {
     val config = DeviceManager.getServerConnectionConfig(serverConnectionConfigId)
@@ -232,6 +233,13 @@ class ApiHandler(var ctx:Context) {
             AbsLogger.error(tag, "Token refresh returned ${it.code} for ${config.name}")
             if (it.code != 401 && it.code != 403) {
               onResult(RefreshResult.Transient)
+              return
+            }
+            // A refresh token works once. If the web side refreshed first, the stored token is already the next one: use it
+            val latest = secureStorage.getRefreshToken(serverConnectionConfigId)
+            if (retriesLeft > 0 && !latest.isNullOrEmpty() && latest != refreshToken) {
+              AbsLogger.info(tag, "Refresh token was replaced while refreshing for ${config.name}, retrying with the new one")
+              refreshAuthTokens(serverConnectionConfigId, httpClient, retriesLeft - 1, onResult)
               return
             }
             handleRefreshRejected(serverConnectionConfigId)

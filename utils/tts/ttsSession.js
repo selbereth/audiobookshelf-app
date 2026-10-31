@@ -10,6 +10,21 @@ const RATE_STORAGE_KEY = 'ttsRate'
 /** The last read-aloud session, so the app can show it (paused) after being closed */
 const LAST_SESSION_KEY = 'ttsLastSession'
 
+/**
+ * What a read-aloud session needs to know about the book. The EPUB reader and the Pebble watch (which starts a book without
+ * the reader) both build it here, so the two cannot drift apart.
+ */
+export const ebookMeta = ({ libraryItem, localLibraryItem = null, url, isLocal = false, serverLibraryItemId = null, localLibraryItemId = null, keepProgress = true, progress = 0 }) => ({
+  libraryItem,
+  localLibraryItem,
+  url,
+  isLocal,
+  serverLibraryItemId,
+  localLibraryItemId,
+  keepProgress,
+  progress
+})
+
 /** Only what the player needs to show the book and reopen it */
 const trimLibraryItem = (item) =>
   item && {
@@ -72,6 +87,17 @@ class TtsSession {
       if (rate > 0) store.commit('tts/setRate', rate)
     } catch (error) {
       // localStorage can be unavailable
+    }
+    this.loadNativeRate()
+  }
+
+  /** The speed is kept natively (the watch can change it while the screen is closed): it wins over what this page saved */
+  async loadNativeRate() {
+    try {
+      const { rate } = await AbsTts.getRate()
+      if (rate > 0) this.store.commit('tts/setRate', rate)
+    } catch (error) {
+      // an older native side has no getRate
     }
   }
 
@@ -376,6 +402,8 @@ class TtsSession {
         this.stop()
       }),
       await AbsTts.addListener('sleepTimer', (data) => this.onSleepTimer(data)),
+      // The speed was changed outside the screen (the watch): follow it without sending it back
+      await AbsTts.addListener('rate', (data) => this.store.commit('tts/setRate', data.rate)),
       await AbsTts.addListener('error', (data) => {
         console.error('[TtsSession] error', data)
         this.toast?.error(data.message || this.str('MessageTtsError'))
@@ -553,6 +581,7 @@ class TtsSession {
     } catch (error) {
       // localStorage can be unavailable
     }
+    this.loadNativeRate()
     this.store.commit('tts/setRestoredSession', {
       libraryItemId: saved.libraryItem.id,
       serverLibraryItemId: saved.serverLibraryItemId,
@@ -584,6 +613,27 @@ class TtsSession {
       console.error('[TtsSession] failed to resume', error)
       this.toast?.error(this.str('MessageTtsFailedToOpenBook'))
     }
+  }
+
+  /**
+   * A book nothing was saved for (chosen on the Pebble watch): open it and read from `cfi`, or from the beginning when it is empty.
+   */
+  async startFresh({ libraryItemId, localLibraryItemId, title, cfi, progress }) {
+    // A book picked from the downloads is read from the file (it works offline); one from the server is fetched
+    const isLocal = !!localLibraryItemId
+    const meta = ebookMeta({
+      libraryItem: { id: libraryItemId || localLibraryItemId, mediaType: 'book', media: { metadata: { title, authorName: '' } } },
+      // The same address the reader reads the book from (Reader.vue ebookUrl); a download is read from the file, not from an address
+      url: isLocal ? 'local' : `/api/items/${libraryItemId}/ebook`,
+      isLocal,
+      serverLibraryItemId: libraryItemId || null,
+      localLibraryItemId: localLibraryItemId || null,
+      progress: progress || 0
+    })
+    this.meta = meta
+    this.loadNativeRate()
+    const book = await this.openBook(meta)
+    await this.start({ book, startCfi: cfi || null, meta })
   }
 
   /** Opens the epub without a reader */

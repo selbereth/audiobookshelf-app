@@ -171,7 +171,7 @@ export const actions = {
    * @returns {Promise<string|null>} the new access token, or null when the server rejected the refresh token (the session is over).
    * Throws when the refresh could not be completed (no network, timeout, server error): the session is still good, so the caller must not log out.
    */
-  async refreshToken({ getters, commit, state }) {
+  async refreshToken({ getters, commit, state, dispatch }) {
     const refreshToken = await this.$db.getRefreshToken(getters.getServerConnectionConfigId)
     if (!refreshToken) {
       console.error('No refresh token found')
@@ -191,6 +191,9 @@ export const actions = {
 
     if (response.status === 401 || response.status === 403) {
       console.error('[user] Token refresh rejected by the server:', response.status)
+      // A refresh token works once: if the native side refreshed first, the stored token is already the next one
+      const latest = await this.$db.getRefreshToken(getters.getServerConnectionConfigId)
+      if (latest && latest !== refreshToken) return dispatch('refreshToken')
       return null
     }
     if (response.status !== 200) {
