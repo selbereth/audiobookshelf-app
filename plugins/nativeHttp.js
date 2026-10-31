@@ -127,7 +127,12 @@ export default function ({ store, $db, $socket }, inject) {
           console.error('[nativeHttp] No refresh token available')
           throw Object.assign(new Error('No refresh token available'), { sessionEnded: true })
         }
-        const newTokens = await this.refreshAccessToken(refreshToken, serverConnectionConfig.address)
+        let newTokens = await this.refreshAccessToken(refreshToken, serverConnectionConfig.address)
+        if (!newTokens?.accessToken) {
+          // A refresh token works once: if the native side refreshed first, the stored token is already the next one
+          const latest = await $db.getRefreshToken(key)
+          if (latest && latest !== refreshToken) newTokens = await this.refreshAccessToken(latest, serverConnectionConfig.address)
+        }
         if (!newTokens?.accessToken) {
           console.error('[nativeHttp] The server rejected the refresh token')
           throw Object.assign(new Error('Failed to refresh access token'), { sessionEnded: true })

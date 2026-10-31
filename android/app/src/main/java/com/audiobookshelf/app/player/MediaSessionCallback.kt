@@ -120,9 +120,7 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
       // anything set above 3 (can happen in the android app) will be reset to 1
       else -> 1.0f
     }
-    mediaManager.setSavedPlaybackRate(newSpeed)
     playerNotificationService.setPlaybackSpeed(newSpeed)
-    playerNotificationService.clientEventEmitter?.onPlaybackSpeedChanged(newSpeed)
   }
 
   override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) {

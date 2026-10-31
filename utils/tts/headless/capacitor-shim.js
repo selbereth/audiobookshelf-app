@@ -30,7 +30,7 @@ export function callNative(method, args = {}) {
   })
 }
 
-const methods = ['start', 'appendChunk', 'prependChunk', 'play', 'pause', 'stop', 'skip', 'seekToSentence', 'reset', 'setRate', 'setPitch', 'setVoice', 'setSleepTimer', 'adjustSleepTimer', 'cancelSleepTimer', 'getWindow', 'getVoices', 'getState', 'saveSnapshot', 'clearSnapshot', 'getSnapshot']
+const methods = ['start', 'appendChunk', 'prependChunk', 'play', 'pause', 'stop', 'skip', 'seekToSentence', 'reset', 'setRate', 'getRate', 'setPitch', 'setVoice', 'setSleepTimer', 'adjustSleepTimer', 'cancelSleepTimer', 'getWindow', 'getVoices', 'getState', 'saveSnapshot', 'clearSnapshot', 'getSnapshot']
 
 export const AbsTts = {
   addListener(name, callback) {

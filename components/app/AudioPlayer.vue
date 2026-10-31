@@ -1034,6 +1034,8 @@ export default {
       if (!data.value || isNaN(data.value)) return
       this.currentPlaybackRate = Number(data.value)
       this.updateTimestamp()
+      // The speed can be changed outside the app's screen (watch, Android Auto): keep the saved user setting the same
+      this.$store.dispatch('user/updateUserSettings', { playbackRate: this.currentPlaybackRate })
     },
     async init() {
       await this.loadPlayerSettings()

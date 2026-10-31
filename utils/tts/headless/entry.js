@@ -48,6 +48,10 @@ window.ttsHeadless = {
     if (!store.state.tts.restored) throw new Error('nothing to resume')
     await ttsSession.resume()
   },
+  /** A book chosen on the watch that was never read aloud: open it and read from the saved place, or from the start */
+  async startNew(session) {
+    await ttsSession.startFresh(session)
+  },
   /** The app's screen is opening: write down where the reading is and stop it, the screen carries on from there */
   async handOver() {
     ttsSession.saveProgressNow()

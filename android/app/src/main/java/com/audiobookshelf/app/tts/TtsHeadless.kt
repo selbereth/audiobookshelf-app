@@ -41,7 +41,12 @@ object TtsHeadless {
 
   /** Opens the saved [session] (the JSON the web part saved) and reads on from where it was left */
   @SuppressLint("SetJavaScriptEnabled")
-  fun resume(context: Context, session: String) {
+  fun resume(context: Context, session: String) = open(context, session, "resume")
+
+  /** Opens a book that was not read aloud before (chosen on the watch) and reads it from the start, or from [session]'s cfi when it has one */
+  fun startNew(context: Context, session: String) = open(context, session, "startNew")
+
+  private fun open(context: Context, session: String, entry: String) {
     main.post {
       shutdownNow()
       val app = context.applicationContext
@@ -58,7 +63,7 @@ object TtsHeadless {
       view.addJavascriptInterface(Bridge(app), "NativeTts")
       view.webViewClient = object : WebViewClient() {
         override fun onPageFinished(page: WebView, url: String?) {
-          page.evaluateJavascript("ttsHeadless.resume(JSON.parse(${JSONObject.quote(session)})).catch(e => console.error('resume failed: ' + e))", null)
+          page.evaluateJavascript("ttsHeadless.$entry(JSON.parse(${JSONObject.quote(session)})).catch(e => console.error('$entry failed: ' + e))", null)
         }
       }
       TtsService.eventListener = forwarder
@@ -189,7 +194,11 @@ object TtsHeadless {
         "skip" -> service?.controller?.skip(input.optString("by", "sentence"), input.optInt("count", 1))
         "seekToSentence" -> return JSONObject().put("found", service?.controller?.seekToSentence(input.optInt("id", -1)) ?: false)
         "reset" -> service?.controller?.reset(input.optInt("streamId"))
-        "setRate" -> service?.controller?.updateVoice(newRate = input.optDouble("rate", 1.0).toFloat())
+        "setRate" -> {
+          val rate = input.optDouble("rate", 1.0).toFloat()
+          service?.controller?.changeRate(rate) ?: TtsController.saveRate(context, rate)
+        }
+        "getRate" -> return JSONObject().put("rate", TtsController.savedRate(context).toString().toDouble())
         "setPitch" -> service?.controller?.updateVoice(newPitch = input.optDouble("pitch", 1.0).toFloat())
         "setVoice" -> service?.controller?.updateVoice(newVoiceId = input.optString("voiceId"))
         "getState" -> {

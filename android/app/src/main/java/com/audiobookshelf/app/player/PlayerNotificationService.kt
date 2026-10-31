@@ -1021,9 +1021,14 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     seekPlayer(getCurrentTime() - amount)
   }
 
+  /**
+   * The one place the playback speed is changed, whoever asks (the app's screen, Android Auto, the Pebble watch): it is
+   * saved in the user settings the app reads when it opens, and the open app is told so its screen follows.
+   */
   fun setPlaybackSpeed(speed: Float) {
-    mediaManager.userSettingsPlaybackRate = speed
+    mediaManager.setSavedPlaybackRate(speed)
     currentPlayer.setPlaybackSpeed(speed)
+    clientEventEmitter?.onPlaybackSpeedChanged(speed)
 
     // Refresh Android Auto actions
     mediaProgressSyncer.currentPlaybackSession?.let { setMediaSessionConnectorCustomActions(it) }

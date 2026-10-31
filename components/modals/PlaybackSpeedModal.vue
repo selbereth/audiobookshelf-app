@@ -37,12 +37,12 @@
 export default {
   props: {
     value: Boolean,
-    playbackRate: Number
+    playbackRate: Number,
+    minSpeed: { type: Number, default: 0.5 }
   },
   data() {
     return {
       currentPlaybackRate: 0,
-      MIN_SPEED: 0.5,
       MAX_SPEED: 10
     }
   },
@@ -77,7 +77,7 @@ export default {
       return this.playbackRate + 0.1 <= this.MAX_SPEED
     },
     canDecrement() {
-      return this.playbackRate - 0.1 >= this.MIN_SPEED
+      return this.playbackRate - 0.1 >= this.minSpeed
     }
   },
   methods: {
@@ -87,7 +87,7 @@ export default {
       this.selected = Number(newPlaybackRate.toFixed(1))
     },
     decrement() {
-      if (this.selected - 0.1 < this.MIN_SPEED) return
+      if (this.selected - 0.1 < this.minSpeed) return
       var newPlaybackRate = this.selected - 0.1
       this.selected = Number(newPlaybackRate.toFixed(1))
     },
