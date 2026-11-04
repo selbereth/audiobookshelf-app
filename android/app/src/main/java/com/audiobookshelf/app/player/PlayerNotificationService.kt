@@ -229,6 +229,9 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     // Initialize Paper
     DbManager.initialize(ctx)
 
+    // The JS core (hidden web view) lives as long as the process
+    com.audiobookshelf.app.core.CoreHost.start(ctx)
+
     // Initialize widget
     DeviceManager.initializeWidgetUpdater(ctx)
 

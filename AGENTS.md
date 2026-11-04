@@ -123,6 +123,24 @@ version implements the same list. Do not put a decision in Kotlin or Swift.
 - A sibling project, `~/projects/find-pebble`, is a find-my-phone Pebble app. It uses the classic PebbleKit broadcast and is a useful
   reference for the Core Devices app's behaviour (vault note `find-pebble`).
 
+## JS core (Android, refactor in progress)
+
+All app logic is moving into one JS core that runs in a hidden web view (`android/.../core/CoreHost.kt`, page `utils/core/`, built by
+`npm run build:core`, part of `npm run sync`). The core is plain JS (no DOM, Vue or Vuex) and is tested in Node with a fake bridge:
+`npm run test:core`. **Native code is connectors only** (`core/*Connector.kt`): it calls the Android API and turns the result into
+JSON, it never chooses, retries, merges, schedules, counts or works out times. Do not add an app decision to Kotlin.
+
+- Bridge (`utils/core/bridge.js`): `native.call(connector, method, args)` down; `native.on(connector, event, handler)` up, each event
+  stamped with the time it happened; `bridge.serve(connector, method, fn)` for calls up that native waits for (with a timeout).
+  Native queues events while the core starts or restarts and replays them in order.
+- Connectors so far: `http` (all server calls: the page cannot use `fetch`, CORS), `wake` (alarms), `system`, `ui` (to the visible UI).
+  The visible UI is a client: `callCore(method, args)` and `onCore(handler)` in `plugins/capacitor/AbsCore.js`. iOS still uses its native code.
+- The core's web view shares the UI web view's renderer process. Chromium kills the app if either web view does not handle a crashed
+  renderer, so `MainActivity` handles it for the UI and `CoreHost` for the core. Keep both.
+- A process with no foreground state has no network: start the foreground service before the core calls the server.
+- Debug builds: `adb shell am broadcast -n <pkg>/com.audiobookshelf.app.core.CoreDebugReceiver --es action start|stop|ping|timers|cors|crash`.
+- Do not symlink `node_modules` into a worktree (Nuxt writes its cache there): clone it with `cp -Rc`.
+
 ## Working style for this repo
 
 - Say what you verified and how (the command or the screenshot) and what you did not run. Do not claim a Pixel result from an
