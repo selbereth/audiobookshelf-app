@@ -18,7 +18,6 @@ import com.audiobookshelf.app.plugins.AbsLogger
 import com.audiobookshelf.app.managers.SecureStorage
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.core.json.JsonReadFeature
-import com.fasterxml.jackson.databind.node.ObjectNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.getcapacitor.JSArray
@@ -56,19 +55,19 @@ class ApiHandler(var ctx:Context) {
   // The JS core makes the server calls (utils/core/modules/api.js): the authorization header, the refresh on a 401 and the retry are
   // its decisions. This class keeps its callers' signatures and answers in the shapes they always had.
   private val workers = Executors.newCachedThreadPool()
+  // How long a progress call waits for the core's answer: longer than the core's own timeouts and one token refresh
+  private val PROGRESS_WAIT_MS = 150000L
 
-  private fun coreRequest(method: String, endpoint: String, payload: JSObject?, config: ServerConnectionConfig?, httpClient: OkHttpClient?, cb: (JSObject) -> Unit) {
-    val timeoutMs = if (httpClient === pingClient) 3000L else 60000L
-    val args = JSONObject()
-      .put("method", method).put("endpoint", endpoint)
-      .put("address", config?.address ?: DeviceManager.serverAddress)
-      .put("token", config?.token ?: DeviceManager.token)
-      .put("serverConnectionConfigId", config?.id ?: DeviceManager.serverConnectionConfigId)
-      .put("timeoutMs", timeoutMs)
-    if (payload != null) args.put("payload", JSONObject(payload.toString()))
+  /** The server a call goes to: the connection the caller names, else the one DeviceManager serves (as before) */
+  private fun serverArgs(config: ServerConnectionConfig?): JSONObject = JSONObject()
+    .put("address", config?.address ?: DeviceManager.serverAddress)
+    .put("token", config?.token ?: DeviceManager.token)
+    .put("serverConnectionConfigId", config?.id ?: DeviceManager.serverConnectionConfigId)
+
+  /** Asks a `core` method and answers on a worker thread (not the main thread): the result object, or {error} if the core could not answer */
+  private fun coreCall(method: String, args: JSONObject, waitMs: Long, cb: (JSObject) -> Unit) {
     CoreHost.start(ctx)
-    // The core answers on the main thread: hand the result to a worker, as OkHttp's callback thread was before
-    CoreHost.callUp("core", "api.request", args, timeoutMs * 2 + 15000) { ok, json ->
+    CoreHost.callUp("core", method, args, waitMs) { ok, json ->
       workers.execute {
         val result = try {
           if (ok) JSObject(json) else JSObject().put("error", "Request failed: $json")
@@ -80,14 +79,20 @@ class ApiHandler(var ctx:Context) {
     }
   }
 
+  private fun coreRequest(method: String, endpoint: String, payload: JSObject?, config: ServerConnectionConfig?, httpClient: OkHttpClient?, cb: (JSObject) -> Unit) {
+    val timeoutMs = if (httpClient === pingClient) 3000L else 60000L
+    val args = serverArgs(config)
+      .put("method", method).put("endpoint", endpoint)
+      .put("timeoutMs", timeoutMs)
+    if (payload != null) args.put("payload", JSONObject(payload.toString()))
+    coreCall("api.request", args, timeoutMs * 2 + 15000, cb)
+  }
+
   private fun getRequest(endpoint:String, httpClient:OkHttpClient?, config:ServerConnectionConfig?, cb: (JSObject) -> Unit) =
     coreRequest("GET", endpoint, null, config, httpClient, cb)
 
   private fun postRequest(endpoint:String, payload: JSObject?, config:ServerConnectionConfig?, cb: (JSObject) -> Unit) =
     coreRequest("POST", endpoint, payload ?: JSObject(), config, null, cb)
-
-  private fun patchRequest(endpoint:String, payload: JSObject, cb: (JSObject) -> Unit) =
-    coreRequest("PATCH", endpoint, payload, null, null, cb)
 
   sealed interface RefreshResult {
     data class Success(val accessToken: String) : RefreshResult
@@ -336,63 +341,43 @@ class ApiHandler(var ctx:Context) {
     }
   }
 
+  // The progress calls below are made by the core (utils/core/modules/progress.js): the endpoints, the payloads and the server
+  // timeouts are its decisions. These keep the callers' signatures and answers.
   fun sendProgressSync(sessionId:String, syncData: MediaProgressSyncData, cb: (Boolean, String?) -> Unit) {
-    val payload = JSObject(jacksonMapper.writeValueAsString(syncData))
-
-    postRequest("/api/session/$sessionId/sync", payload, null) {
-      if (!it.getString("error").isNullOrEmpty()) {
-        cb(false, it.getString("error"))
-      } else {
-        cb(true, null)
-      }
+    val args = serverArgs(null)
+      .put("sessionId", sessionId)
+      .put("syncData", JSONObject(jacksonMapper.writeValueAsString(syncData)))
+    coreCall("progress.sendSession", args, PROGRESS_WAIT_MS) {
+      val error = it.getString("error")
+      if (!error.isNullOrEmpty()) cb(false, error) else cb(true, null)
     }
   }
 
-  private fun createPartialPlaybackSession(playbackSession: PlaybackSession): ObjectNode {
-    val json = jacksonMapper.createObjectNode()
-    json.put("id", playbackSession.id)
-    json.put("userId", playbackSession.userId)
-    json.put("libraryItemId", playbackSession.libraryItemId)
-    json.put("episodeId", playbackSession.episodeId)
-    json.put("mediaType", playbackSession.mediaType)
-    json.put("displayTitle", playbackSession.displayTitle)
-    json.put("displayAuthor", playbackSession.displayAuthor)
-    json.put("duration", playbackSession.duration)
-    json.put("playMethod", playbackSession.playMethod)
-    json.put("startedAt", playbackSession.startedAt)
-    json.put("updatedAt", playbackSession.updatedAt)
-    json.put("timeListening", playbackSession.timeListening)
-    json.put("currentTime", playbackSession.currentTime)
-    json.put("mediaPlayer", playbackSession.mediaPlayer)
-    return json
-  }
-
   fun sendLocalProgressSync(playbackSession:PlaybackSession, cb: (Boolean, String?) -> Unit) {
-    val partialSession = createPartialPlaybackSession(playbackSession)
-    partialSession.set<ObjectNode>("deviceInfo", jacksonMapper.valueToTree(playbackSession.deviceInfo))
-    postRequest("/api/session/local", JSObject(partialSession.toString()), null) {
-      if (!it.getString("error").isNullOrEmpty()) {
-        cb(false, it.getString("error"))
-      } else {
-        cb(true, null)
-      }
+    val args = serverArgs(null).put("session", JSONObject(jacksonMapper.writeValueAsString(playbackSession)))
+    coreCall("progress.sendLocalSession", args, PROGRESS_WAIT_MS) {
+      val error = it.getString("error")
+      if (!error.isNullOrEmpty()) cb(false, error) else cb(true, null)
     }
   }
 
   fun updateMediaProgress(libraryItemId:String,episodeId:String?,updatePayload:JSObject, cb: () -> Unit) {
     Log.d(tag, "updateMediaProgress $libraryItemId $episodeId $updatePayload")
-    val endpoint = if(episodeId.isNullOrEmpty()) "/api/me/progress/$libraryItemId" else "/api/me/progress/$libraryItemId/$episodeId"
-    patchRequest(endpoint,updatePayload) {
+    val args = serverArgs(null)
+      .put("libraryItemId", libraryItemId)
+      .put("episodeId", episodeId)
+      .put("updatePayload", updatePayload)
+    coreCall("progress.updateMedia", args, PROGRESS_WAIT_MS) {
       Log.d(tag, "updateMediaProgress patched progress")
       cb()
     }
   }
 
   fun getMediaProgress(libraryItemId:String, episodeId:String?, serverConnectionConfig:ServerConnectionConfig?, cb: (MediaProgress?) -> Unit) {
-    val endpoint = if(episodeId.isNullOrEmpty()) "/api/me/progress/$libraryItemId" else "/api/me/progress/$libraryItemId/$episodeId"
-
-    // TODO: Using ping client here allows for shorter timeout (3 seconds), maybe rename or make diff client for requests requiring quicker response
-    getRequest(endpoint, pingClient, serverConnectionConfig) {
+    val args = serverArgs(serverConnectionConfig)
+      .put("libraryItemId", libraryItemId)
+      .put("episodeId", episodeId)
+    coreCall("progress.getMedia", args, PROGRESS_WAIT_MS) {
       if (it.has("error")) {
         Log.e(tag, "getMediaProgress: Failed to get progress")
         cb(null)
@@ -432,8 +417,9 @@ class ApiHandler(var ctx:Context) {
 
   fun closePlaybackSession(playbackSessionId:String, config:ServerConnectionConfig?, cb: (Boolean) -> Unit) {
     Log.d(tag, "closePlaybackSession: playbackSessionId=$playbackSessionId")
-    postRequest("/api/session/$playbackSessionId/close", null, config) {
-      cb(true)
+    val args = serverArgs(config).put("playbackSessionId", playbackSessionId)
+    coreCall("progress.closeSession", args, PROGRESS_WAIT_MS) {
+      cb(it.getString("error").isNullOrEmpty())
     }
   }
 
