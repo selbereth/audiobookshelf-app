@@ -19,13 +19,17 @@ import com.anggrayudi.storage.SimpleStorage
 import com.anggrayudi.storage.SimpleStorageHelper
 import com.audiobookshelf.app.managers.DbManager
 import com.audiobookshelf.app.player.PlayerNotificationService
+import com.audiobookshelf.app.core.CoreHost
 import com.audiobookshelf.app.plugins.AbsAudioPlayer
+import com.audiobookshelf.app.plugins.AbsCore
 import com.audiobookshelf.app.plugins.AbsDatabase
 import com.audiobookshelf.app.plugins.AbsDownloader
 import com.audiobookshelf.app.plugins.AbsFileSystem
 import com.audiobookshelf.app.plugins.AbsLogger
 import com.audiobookshelf.app.plugins.AbsTts
 import com.getcapacitor.BridgeActivity
+import com.getcapacitor.WebViewListener
+import android.webkit.RenderProcessGoneDetail
 
 
 class MainActivity : BridgeActivity() {
@@ -51,6 +55,7 @@ class MainActivity : BridgeActivity() {
     registerPlugin(AbsDatabase::class.java)
     registerPlugin(AbsLogger::class.java)
     registerPlugin(AbsTts::class.java)
+    registerPlugin(AbsCore::class.java)
 
     super.onCreate(savedInstanceState)
     Log.d(tag, "onCreate")
@@ -98,6 +103,17 @@ class MainActivity : BridgeActivity() {
     }
 
     requestNeededPermissions()
+
+    // The JS core's hidden web view shares this web view's renderer process: Chromium kills the whole app (and the player) when a
+    // crashed renderer is not handled by every web view. Handle it here by reloading the screen, the app process stays alive.
+    CoreHost.start(applicationContext)
+    bridge.addWebViewListener(object : WebViewListener() {
+      override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+        Log.w(tag, "UI renderer gone (crashed=${detail.didCrash()}), recreating the screen")
+        runOnUiThread { recreate() }
+        return true
+      }
+    })
   }
 
   private fun requestNeededPermissions() {

@@ -143,6 +143,9 @@
                 <action android:name="io.rebble.pebblekit2.RECEIVE_DATA_FROM_WATCH" />
             </intent-filter>
         </service>
+
+        <!-- JS core: the alarm of the wake connector -->
+        <receiver android:name=".core.CoreWakeReceiver" android:exported="false" />
     </application>
 
 </manifest>
