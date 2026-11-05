@@ -61,6 +61,10 @@ object CoreHost {
     register("wake", WakeConnector(context))
     register("system", SystemConnector(context))
     register("ui", UiConnector())
+    register("store", StoreConnector())
+    register("secure", SecureConnector(context))
+    register("files", FilesConnector(context))
+    register("device", DeviceConnector())
   }
 
   @SuppressLint("SetJavaScriptEnabled")

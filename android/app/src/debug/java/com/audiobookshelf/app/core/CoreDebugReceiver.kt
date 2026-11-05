@@ -18,6 +18,23 @@ class CoreDebugReceiver : BroadcastReceiver() {
     val app = context.applicationContext
     when (intent.getStringExtra("action")) {
       "start" -> CoreHost.start(app)
+      "paperCheck" -> Thread { PaperRoundTripCheck.run(app) }.start()
+      "threads" -> Thread.getAllStackTraces().forEach { (t, st) ->
+        if (t.name.startsWith("Thread-") || t.name == "main") Log.i("ThreadDump", "${t.name} ${t.state}\n" + st.take(14).joinToString("\n") { "    at $it" })
+      }
+      "call" -> {
+        val method = intent.getStringExtra("method") ?: ""
+        val started = System.currentTimeMillis()
+        CoreHost.callUp("core", method, JSONObject(intent.getStringExtra("args") ?: "{}"), 60000) { ok, json ->
+          Log.i("CoreDebug", "call $method ok=$ok ${System.currentTimeMillis() - started} ms ${json.take(intent.getIntExtra("max", 300))}")
+        }
+      }
+      "kotlinView" -> Thread {
+        val t0 = System.currentTimeMillis()
+        com.audiobookshelf.app.managers.DbManager.initialize(app)
+        val dm = com.audiobookshelf.app.device.DeviceManager
+        Log.i("CoreDebug", "kotlinView settings.jumpForwardTime=${dm.deviceData.deviceSettings?.jumpForwardTime} configs=${dm.deviceData.serverConnectionConfigs.size} current=${dm.serverConnectionConfig?.id?.take(8)} items=${dm.dbManager.getLocalLibraryItems().size} progress=${dm.dbManager.getAllLocalMediaProgress().size} (${System.currentTimeMillis() - t0} ms)")
+      }.start()
       "stop" -> CoreHost.stop()
       "crash" -> CoreHost.crashForTest()
       "timers" -> CoreHost.callUp("core", "timerTest", JSONObject().put("sleepMs", intent.getIntExtra("sleepMs", 60000)).put("durationMs", intent.getIntExtra("durationMs", 300000)), 5000) { _, _ -> }
