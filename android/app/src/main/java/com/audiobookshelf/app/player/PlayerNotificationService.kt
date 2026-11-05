@@ -188,6 +188,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
   // detach player
   override fun onDestroy() {
+    DeviceManager.onSettingsChanged = null
     try {
       val connectivityManager =
               getSystemService(ConnectivityManager::class.java) as ConnectivityManager
@@ -231,6 +232,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
     // The JS core (hidden web view) lives as long as the process
     com.audiobookshelf.app.core.CoreHost.start(ctx)
+    DeviceManager.onSettingsChanged = { Handler(Looper.getMainLooper()).post { setMediaSessionConnectorPlaybackActions() } }
 
     // Initialize widget
     DeviceManager.initializeWidgetUpdater(ctx)

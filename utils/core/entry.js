@@ -15,3 +15,5 @@ window.__core = {
   callUp: (id, connector, method, json) => core.bridge.handleCallUp(id, connector, method, json)
 }
 core.bridge.ready()
+// Apply defaults for settings older versions lack (tells native to reload its copy)
+core.db.startup().catch((e) => console.error('db startup failed: ' + e.message))

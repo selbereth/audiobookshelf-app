@@ -1,4 +1,5 @@
 import { registerPlugin, Capacitor, WebPlugin } from '@capacitor/core'
+import { callCore } from './AbsCore'
 
 /**
  * @typedef {Object} ServerConnectionConfig
@@ -393,8 +394,31 @@ class AbsDatabaseWeb extends WebPlugin {
   }
 }
 
-const AbsDatabase = registerPlugin('AbsDatabase', {
+const AbsDatabasePlugin = registerPlugin('AbsDatabase', {
   web: () => new AbsDatabaseWeb()
 })
+
+/**
+ * On Android the database is in the JS core (utils/core/modules/db.js): these calls go there with the same arguments and results
+ * the native plugin had. `syncLocalSessionsWithServer` and `updateLocalMediaProgressFinished` also call the server, so they stay
+ * in the native plugin until the API moves (Phase 3), and so do the plugin's events (token refresh). iOS keeps the native plugin.
+ */
+const coreMethods = new Set([
+  'getDeviceData', 'getLocalFolders', 'getLocalFolder', 'getLocalLibraryItem', 'getLocalLibraryItemByLId', 'getLocalLibraryItems',
+  'getLocalLibraryItemsInFolder', 'setCurrentServerConnectionConfig', 'removeServerConnectionConfig', 'getRefreshToken',
+  'clearRefreshToken', 'getAccessToken', 'logout', 'getAllLocalMediaProgress', 'getLocalMediaProgressForServerItem',
+  'removeLocalMediaProgress', 'syncServerMediaProgressWithLocalMediaProgress', 'updateLocalEbookProgress', 'updateLocalTrackOrder',
+  'updateDeviceSettings', 'getMediaItemHistory'
+])
+
+const AbsDatabase =
+  Capacitor.getPlatform() === 'android'
+    ? new Proxy(AbsDatabasePlugin, {
+        get(target, prop) {
+          if (coreMethods.has(prop)) return (args) => callCore('db.' + prop, args || {}, 30000)
+          return target[prop]
+        }
+      })
+    : AbsDatabasePlugin
 
 export { AbsDatabase }

@@ -13,6 +13,9 @@ export default async function ({ store }) {
     })
     const answer = await callCore('hello')
     console.log('[core] hello answered ' + JSON.stringify(answer))
+    // Remove progress, local files and logs with nothing behind them (the native plugin did this when the screen opened)
+    const cleaned = await callCore('db.cleanup', {}, 60000)
+    console.log('[core] db cleanup ' + JSON.stringify(cleaned))
   } catch (e) {
     console.error('[core] not reachable: ' + e)
   }

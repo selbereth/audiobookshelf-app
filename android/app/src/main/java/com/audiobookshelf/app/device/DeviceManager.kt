@@ -47,48 +47,12 @@ object DeviceManager {
 
   var widgetUpdater: WidgetEventEmitter? = null
 
-  init {
-    Log.d(tag, "Device Manager Singleton invoked")
+  /** Set by the player service: called when the core saved new device settings (it refreshes the media notification's actions) */
+  var onSettingsChanged: (() -> Unit)? = null
 
-    // Initialize new sleep timer settings and shake sensitivity added in v0.9.61
-    if (deviceData.deviceSettings?.autoSleepTimerStartTime == null ||
-                    deviceData.deviceSettings?.autoSleepTimerEndTime == null
-    ) {
-      deviceData.deviceSettings?.autoSleepTimerStartTime = "22:00"
-      deviceData.deviceSettings?.autoSleepTimerEndTime = "06:00"
-      deviceData.deviceSettings?.sleepTimerLength = 900000L
-    }
-    if (deviceData.deviceSettings?.shakeSensitivity == null) {
-      deviceData.deviceSettings?.shakeSensitivity = ShakeSensitivitySetting.MEDIUM
-    }
-    // Initialize auto sleep timer auto rewind added in v0.9.64
-    if (deviceData.deviceSettings?.autoSleepTimerAutoRewindTime == null) {
-      deviceData.deviceSettings?.autoSleepTimerAutoRewindTime = 300000L // 5 minutes
-    }
-    // Initialize sleep timer almost done chime added in v0.9.81
-    if (deviceData.deviceSettings?.enableSleepTimerAlmostDoneChime == null) {
-      deviceData.deviceSettings?.enableSleepTimerAlmostDoneChime = false
-    }
-
-    // Language added in v0.9.69
-    if (deviceData.deviceSettings?.languageCode == null) {
-      deviceData.deviceSettings?.languageCode = "en-us"
-    }
-
-    if (deviceData.deviceSettings?.downloadUsingCellular == null) {
-      deviceData.deviceSettings?.downloadUsingCellular = DownloadUsingCellularSetting.ALWAYS
-    }
-
-    if (deviceData.deviceSettings?.streamingUsingCellular == null) {
-      deviceData.deviceSettings?.streamingUsingCellular = StreamingUsingCellularSetting.ALWAYS
-    }
-    if (deviceData.deviceSettings?.androidAutoBrowseLimitForGrouping == null) {
-      deviceData.deviceSettings?.androidAutoBrowseLimitForGrouping = 100
-    }
-    if (deviceData.deviceSettings?.androidAutoBrowseSeriesSequenceOrder == null) {
-      deviceData.deviceSettings?.androidAutoBrowseSeriesSequenceOrder =
-              AndroidAutoBrowseSeriesSequenceOrderSetting.ASC
-    }
+  /** The core wrote the device data: take its copy (the defaults for missing settings are applied by the core) */
+  fun reloadDeviceData() {
+    deviceData = dbManager.getDeviceData()
   }
 
   /**
