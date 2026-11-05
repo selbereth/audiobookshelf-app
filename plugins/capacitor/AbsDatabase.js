@@ -400,8 +400,8 @@ const AbsDatabasePlugin = registerPlugin('AbsDatabase', {
 
 /**
  * On Android the database is in the JS core (utils/core/modules/db.js): these calls go there with the same arguments and results
- * the native plugin had. `syncLocalSessionsWithServer` and `updateLocalMediaProgressFinished` also call the server, so they stay
- * in the native plugin until the sync logic moves (later in Phase 3). The token events come from the core. iOS keeps the native plugin.
+ * the native plugin had. `updateLocalMediaProgressFinished` also calls the server, so it stays in the native plugin for now.
+ * `syncLocalSessionsWithServer` is in the core's sync module. The token events come from the core. iOS keeps the native plugin.
  */
 const coreMethods = new Set([
   'getDeviceData', 'getLocalFolders', 'getLocalFolder', 'getLocalLibraryItem', 'getLocalLibraryItemByLId', 'getLocalLibraryItems',
@@ -418,6 +418,7 @@ const AbsDatabase =
     ? new Proxy(AbsDatabasePlugin, {
         get(target, prop) {
           if (coreMethods.has(prop)) return (args) => callCore('db.' + prop, args || {}, 30000)
+          if (prop === 'syncLocalSessionsWithServer') return (args) => callCore('sync.syncLocalSessionsWithServer', args || {}, 120000)
           // The token events now come from the core (api.js) as core events, not from the native plugin
           if (prop === 'addListener')
             return (name, handler) => {

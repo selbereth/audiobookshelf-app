@@ -268,6 +268,23 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
     emitToUi('onMediaItemHistoryUpdated', history)
   }
 
+  /** MediaEventManager.addPlaybackEvent: the history of a session's item gets an event; the history is created when it does not exist */
+  async function addPlaybackEvent(name, session, syncResult) {
+    const id = rules.sessionMediaItemId(session)
+    let history = await store.get(C.mediaItemHistory, id)
+    if (!history) {
+      history = {
+        id, mediaDisplayTitle: session.displayTitle || 'Unset', libraryItemId: session.libraryItemId || '', episodeId: session.episodeId ?? null,
+        isLocal: false, serverConnectionConfigId: session.serverConnectionConfigId ?? null, serverAddress: session.serverAddress ?? null,
+        serverUserId: session.userId ?? null, createdAt: now(), events: []
+      }
+    }
+    history.events = history.events || []
+    history.events.push(rules.playbackEvent(name, session.currentTime, syncResult, now()))
+    await store.put(C.mediaItemHistory, id, history)
+    emitToUi('onMediaItemHistoryUpdated', history)
+  }
+
   define('getMediaItemHistory', async ({ mediaId }) => (await store.get(C.mediaItemHistory, mediaId || '')) || {})
 
   // ---- startup and cleanup
@@ -314,5 +331,5 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
     return result
   }, { write: true })
 
-  return { methods, store, serial, startup: () => serial(() => methods.startup({})) }
+  return { methods, store, serial, addSyncEvent, addPlaybackEvent, now, startup: () => serial(() => methods.startup({})) }
 }
