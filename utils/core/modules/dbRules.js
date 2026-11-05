@@ -246,3 +246,18 @@ export function mediaItemIdOf(p) {
 export function syncEvent(currentTime, description, nowMs) {
   return { name: 'Sync', type: 'Sync', description, currentTime, serverSyncAttempted: false, serverSyncSuccess: null, serverSyncMessage: null, timestamp: nowMs }
 }
+
+/** PlaybackSession.mediaItemId */
+export function sessionMediaItemId(s) {
+  return s.episodeId ? `${s.libraryItemId}-${s.episodeId}` : s.libraryItemId || ''
+}
+
+export function playbackEvent(name, currentTime, syncResult, nowMs) {
+  return {
+    name, type: 'Playback', description: '', currentTime,
+    serverSyncAttempted: (syncResult && syncResult.serverSyncAttempted) || false,
+    serverSyncSuccess: syncResult ? syncResult.serverSyncSuccess ?? null : null,
+    serverSyncMessage: syncResult ? syncResult.serverSyncMessage ?? null : null,
+    timestamp: nowMs
+  }
+}

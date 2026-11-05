@@ -1,16 +1,24 @@
 package com.audiobookshelf.app.core
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.provider.Settings
+import com.audiobookshelf.app.BuildConfig
 import org.json.JSONObject
 
 /** `system.deviceInfo`, `system.appVersion`, `system.network`: facts from Android, nothing decided here. */
 class SystemConnector(private val context: Context) : Connector {
   override fun call(method: String, args: JSONObject, reply: (Boolean, String) -> Unit) {
     when (method) {
-      "deviceInfo" -> reply(true, JSONObject().put("platform", "android").put("sdk", Build.VERSION.SDK_INT).put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL).toString())
+      "deviceInfo" -> {
+        @SuppressLint("HardwareIds")
+        val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: ""
+        reply(true, JSONObject().put("platform", "android").put("sdk", Build.VERSION.SDK_INT).put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL)
+          .put("deviceId", deviceId).put("versionName", BuildConfig.VERSION_NAME).toString())
+      }
       "appVersion" -> {
         val info = context.packageManager.getPackageInfo(context.packageName, 0)
         reply(true, JSONObject().put("versionName", info.versionName).put("versionCode", info.longVersionCode).put("packageName", context.packageName).toString())

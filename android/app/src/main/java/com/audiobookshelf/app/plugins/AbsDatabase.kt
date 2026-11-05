@@ -30,40 +30,6 @@ class AbsDatabase : Plugin() {
   }
 
   @PluginMethod
-  fun syncLocalSessionsWithServer(call:PluginCall) {
-    if (DeviceManager.serverConnectionConfig == null) {
-      AbsLogger.error("AbsDatabase", "syncLocalSessionsWithServer: not connected to server")
-      return call.resolve()
-    }
-
-    apiHandler.syncLocalMediaProgressForUser {
-      val savedSessions = DeviceManager.dbManager.getPlaybackSessions().filter { it.serverConnectionConfigId == DeviceManager.serverConnectionConfigId }
-
-      if (savedSessions.isNotEmpty()) {
-        apiHandler.sendSyncLocalSessions(savedSessions) { success, errorMsg ->
-          if (!success) {
-            call.resolve(JSObject("{\"error\":\"$errorMsg\"}"))
-          } else {
-            AbsLogger.info("AbsDatabase", "syncLocalSessionsWithServer: Finished sending local playback sessions to server. Removing ${savedSessions.size} saved sessions.")
-            // Remove all local sessions
-            savedSessions.forEach {
-              DeviceManager.dbManager.removePlaybackSession(it.id)
-            }
-            call.resolve()
-          }
-        }
-      } else {
-        AbsLogger.info("AbsDatabase", "syncLocalSessionsWithServer: No saved local playback sessions to send to server.")
-        call.resolve()
-      }
-    }
-  }
-
-  // Updates received via web socket
-  // This function doesn't need to sync with the server also because this data is coming from the server
-  // If sending the localMediaProgressId then update existing media progress
-  // If sending localLibraryItemId then save new local media progress
-  @PluginMethod
   fun updateLocalMediaProgressFinished(call:PluginCall) {
     val localLibraryItemId = call.getString("localLibraryItemId", "").toString()
     var localEpisodeId:String? = call.getString("localEpisodeId", "").toString()
