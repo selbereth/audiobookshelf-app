@@ -6,6 +6,7 @@
 import { createBridge } from './bridge'
 import { diagnosticsModule } from './modules/diagnostics'
 import { dbModule } from './modules/db'
+import { apiModule } from './modules/api'
 
 export function createCore(transport, { log = console.log, now = () => Date.now() } = {}) {
   const bridge = createBridge(transport)
@@ -19,6 +20,7 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
   const emitToUi = (event, data = {}) => bridge.call('ui', 'emit', { event, data }).catch(() => {})
 
   const db = dbModule(bridge, { log, now, emitToUi })
+  const api = apiModule(bridge, { log, db })
 
   // The UI says hello when it opens; the core answers and also sends an event, so both directions can be seen
   bridge.serve('core', 'hello', () => {
@@ -26,5 +28,5 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
     return { ok: true }
   })
 
-  return { bridge, emitToUi, db }
+  return { bridge, emitToUi, db, api }
 }

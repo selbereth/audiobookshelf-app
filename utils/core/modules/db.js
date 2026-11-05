@@ -124,6 +124,38 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
     return { success: !!(r && r.removed) }
   })
 
+  /**
+   * The server gave new tokens (api.js refresh). The refresh token goes to secure storage when it is new, the access token to the
+   * saved connection (a queued download can refresh a server that is not the current one). The UI is told only for the current server.
+   */
+  define('updateTokens', async ({ serverConnectionConfigId, accessToken, refreshToken }) => {
+    const stored = await bridge.call('secure', 'get', { key: serverConnectionConfigId })
+    if (nonEmpty(refreshToken) && refreshToken !== (stored && stored.value)) await bridge.call('secure', 'put', { key: serverConnectionConfigId, value: refreshToken })
+    const data = await readDevice()
+    const config = data.serverConnectionConfigs.find((c) => c.id === serverConnectionConfigId)
+    const isCurrent = data.lastServerConnectionConfigId === serverConnectionConfigId
+    if (config) {
+      config.token = accessToken
+      await saveDevice(data)
+    }
+    // Native keeps its own copy of the current connection: refreshing it makes the new access token the one it sends
+    await deviceSync(isCurrent ? { currentServerId: serverConnectionConfigId } : {})
+    if (isCurrent) emitToUi('onTokenRefresh', { accessToken })
+    return {}
+  }, { write: true })
+
+  /** The server refused the refresh token for good: forget it, and when that was the current server sign out (the UI goes to login) */
+  define('clearSession', async ({ serverConnectionConfigId }) => {
+    await bridge.call('secure', 'delete', { key: serverConnectionConfigId })
+    const data = await readDevice()
+    if (data.lastServerConnectionConfigId !== serverConnectionConfigId) return { current: false }
+    data.lastServerConnectionConfigId = null
+    await saveDevice(data)
+    await deviceSync({ currentServerId: null })
+    emitToUi('onTokenRefreshFailure', { error: 'Token refresh failed', serverConnectionConfigId })
+    return { current: true }
+  }, { write: true })
+
   define('getAccessToken', async ({ serverConnectionConfigId }) => {
     const data = await readDevice()
     const config = data.serverConnectionConfigs.find((c) => c.id === serverConnectionConfigId)
@@ -282,5 +314,5 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
     return result
   }, { write: true })
 
-  return { methods, store, startup: () => serial(() => methods.startup({})) }
+  return { methods, store, serial, startup: () => serial(() => methods.startup({})) }
 }

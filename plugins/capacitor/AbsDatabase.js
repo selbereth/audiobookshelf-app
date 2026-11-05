@@ -1,5 +1,5 @@
 import { registerPlugin, Capacitor, WebPlugin } from '@capacitor/core'
-import { callCore } from './AbsCore'
+import { callCore, onCore } from './AbsCore'
 
 /**
  * @typedef {Object} ServerConnectionConfig
@@ -401,7 +401,7 @@ const AbsDatabasePlugin = registerPlugin('AbsDatabase', {
 /**
  * On Android the database is in the JS core (utils/core/modules/db.js): these calls go there with the same arguments and results
  * the native plugin had. `syncLocalSessionsWithServer` and `updateLocalMediaProgressFinished` also call the server, so they stay
- * in the native plugin until the API moves (Phase 3), and so do the plugin's events (token refresh). iOS keeps the native plugin.
+ * in the native plugin until the sync logic moves (later in Phase 3). The token events come from the core. iOS keeps the native plugin.
  */
 const coreMethods = new Set([
   'getDeviceData', 'getLocalFolders', 'getLocalFolder', 'getLocalLibraryItem', 'getLocalLibraryItemByLId', 'getLocalLibraryItems',
@@ -411,11 +411,20 @@ const coreMethods = new Set([
   'updateDeviceSettings', 'getMediaItemHistory'
 ])
 
+const coreEvents = new Set(['onTokenRefresh', 'onTokenRefreshFailure'])
+
 const AbsDatabase =
   Capacitor.getPlatform() === 'android'
     ? new Proxy(AbsDatabasePlugin, {
         get(target, prop) {
           if (coreMethods.has(prop)) return (args) => callCore('db.' + prop, args || {}, 30000)
+          // The token events now come from the core (api.js) as core events, not from the native plugin
+          if (prop === 'addListener')
+            return (name, handler) => {
+              if (!coreEvents.has(name)) return target.addListener(name, handler)
+              const off = onCore((event, data) => event === name && handler(data))
+              return off.then((fn) => ({ remove: fn }))
+            }
           return target[prop]
         }
       })
