@@ -7,6 +7,8 @@
  *  - updateMedia({libraryItemId, episodeId, updatePayload}) -> {} or {error}   (PATCH)
  *  - closeSession({playbackSessionId})         -> {} or {error}   (POST with an empty body, as before)
  *  - getMedia({libraryItemId, episodeId})      -> the MediaProgress JSON, or {error}; 3 s timeout, the answer is wanted quickly
+ *  - updateLocalFinished({localLibraryItemId, localEpisodeId, isFinished}) -> {local, server, localMediaProgress} or {error}
+ * A caller that names no server (no `address`) gets the current one: api.request decides.
  * Retries, the token refresh and the timeouts are api.js's and this module's decisions, not native's.
  */
 import * as rules from './dbRules'
@@ -16,7 +18,7 @@ export function progressEndpoint(libraryItemId, episodeId) {
   return episodeId ? `/api/me/progress/${libraryItemId}/${episodeId}` : `/api/me/progress/${libraryItemId}`
 }
 
-export function progressModule(bridge, { api }) {
+export function progressModule(bridge, { api, db }) {
   const GET_PROGRESS_TIMEOUT = 3000
   const server = (a) => ({ address: a.address, token: a.token, serverConnectionConfigId: a.serverConnectionConfigId })
   const outcome = (r) => (r.error ? { error: r.error } : {})
@@ -45,11 +47,29 @@ export function progressModule(bridge, { api }) {
     return api.request({ method: 'GET', endpoint, timeoutMs: GET_PROGRESS_TIMEOUT, ...server(a) })
   }
 
+  /**
+   * updateLocalMediaProgressFinished: the local progress (db.setLocalMediaProgressFinished), then the server when that progress
+   * belongs to the server the user is logged into. Answers {local, server, localMediaProgress} or {error} (the local rule's error).
+   */
+  async function updateLocalFinished(a) {
+    const r = await db.methods.setLocalMediaProgressFinished(a)
+    if (r.error) return r
+    const p = r.localMediaProgress
+    const current = (await db.methods.getDeviceData()).lastServerConnectionConfigId
+    let server = false
+    if (p.serverConnectionConfigId && p.serverConnectionConfigId === current) {
+      const u = await updateMedia({ libraryItemId: p.libraryItemId || '', episodeId: p.episodeId || '', updatePayload: { isFinished: a.isFinished === true } })
+      server = !u.error
+    }
+    return { local: true, server, localMediaProgress: p }
+  }
+
+  bridge.serve('core', 'progress.updateLocalFinished', (a) => updateLocalFinished(a || {}))
   bridge.serve('core', 'progress.sendSession', (a) => sendSession(a || {}))
   bridge.serve('core', 'progress.sendLocalSession', (a) => sendLocalSession(a || {}))
   bridge.serve('core', 'progress.updateMedia', (a) => updateMedia(a || {}))
   bridge.serve('core', 'progress.closeSession', (a) => closeSession(a || {}))
   bridge.serve('core', 'progress.getMedia', (a) => getMedia(a || {}))
 
-  return { sendSession, sendLocalSession, updateMedia, closeSession, getMedia }
+  return { sendSession, sendLocalSession, updateMedia, closeSession, getMedia, updateLocalFinished }
 }

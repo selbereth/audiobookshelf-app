@@ -31,7 +31,6 @@ import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
 class ApiHandler(var ctx:Context) {
   val tag = "ApiHandler"
@@ -45,7 +44,6 @@ class ApiHandler(var ctx:Context) {
     }
   }
 
-  private var pingClient = OkHttpClient.Builder().callTimeout(3, TimeUnit.SECONDS).build()
   private var jacksonMapper = jacksonObjectMapper().enable(JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS.mappedFeature())
 
   @JsonIgnoreProperties(ignoreUnknown = true)
@@ -55,14 +53,15 @@ class ApiHandler(var ctx:Context) {
   // The JS core makes the server calls (utils/core/modules/api.js): the authorization header, the refresh on a 401 and the retry are
   // its decisions. This class keeps its callers' signatures and answers in the shapes they always had.
   private val workers = Executors.newCachedThreadPool()
-  // How long a progress call waits for the core's answer: longer than the core's own timeouts and one token refresh
-  private val PROGRESS_WAIT_MS = 150000L
+  // How long a call waits for the core's answer: longer than the core's own timeouts and one token refresh
+  private val SERVER_WAIT_MS = 150000L
 
-  /** The server a call goes to: the connection the caller names, else the one DeviceManager serves (as before) */
-  private fun serverArgs(config: ServerConnectionConfig?): JSONObject = JSONObject()
-    .put("address", config?.address ?: DeviceManager.serverAddress)
-    .put("token", config?.token ?: DeviceManager.token)
-    .put("serverConnectionConfigId", config?.id ?: DeviceManager.serverConnectionConfigId)
+  /** The server a call goes to: the one the caller names. Without one the core picks the current server (nothing is sent) */
+  private fun serverArgs(config: ServerConnectionConfig?): JSONObject {
+    val args = JSONObject()
+    if (config != null) args.put("address", config.address).put("token", config.token).put("serverConnectionConfigId", config.id)
+    return args
+  }
 
   /** Asks a `core` method and answers on a worker thread (not the main thread): the result object, or {error} if the core could not answer */
   private fun coreCall(method: String, args: JSONObject, waitMs: Long, cb: (JSObject) -> Unit) {
@@ -79,20 +78,16 @@ class ApiHandler(var ctx:Context) {
     }
   }
 
-  private fun coreRequest(method: String, endpoint: String, payload: JSObject?, config: ServerConnectionConfig?, httpClient: OkHttpClient?, cb: (JSObject) -> Unit) {
-    val timeoutMs = if (httpClient === pingClient) 3000L else 60000L
-    val args = serverArgs(config)
+  private fun coreRequest(method: String, endpoint: String, payload: JSObject?, cb: (JSObject) -> Unit) {
+    val timeoutMs = 60000L
+    val args = JSONObject()
       .put("method", method).put("endpoint", endpoint)
       .put("timeoutMs", timeoutMs)
     if (payload != null) args.put("payload", JSONObject(payload.toString()))
     coreCall("api.request", args, timeoutMs * 2 + 15000, cb)
   }
 
-  private fun getRequest(endpoint:String, httpClient:OkHttpClient?, config:ServerConnectionConfig?, cb: (JSObject) -> Unit) =
-    coreRequest("GET", endpoint, null, config, httpClient, cb)
-
-  private fun postRequest(endpoint:String, payload: JSObject?, config:ServerConnectionConfig?, cb: (JSObject) -> Unit) =
-    coreRequest("POST", endpoint, payload ?: JSObject(), config, null, cb)
+  private fun getRequest(endpoint:String, cb: (JSObject) -> Unit) = coreRequest("GET", endpoint, null, cb)
 
   sealed interface RefreshResult {
     data class Success(val accessToken: String) : RefreshResult
@@ -125,7 +120,7 @@ class ApiHandler(var ctx:Context) {
   }
 
   fun getCurrentUser(cb: (User?) -> Unit) {
-    getRequest("/api/me", null, null) {
+    getRequest("/api/me") {
       if (it.has("error")) {
         Log.e(tag, it.getString("error") ?: "getCurrentUser Failed")
         cb(null)
@@ -138,7 +133,7 @@ class ApiHandler(var ctx:Context) {
 
   fun getLibraries(cb: (List<Library>) -> Unit) {
     val mapper = jacksonMapper
-    getRequest("/api/libraries?include=stats", null,null) {
+    getRequest("/api/libraries?include=stats") {
       val libraries = mutableListOf<Library>()
 
       var array = JSONArray()
@@ -156,7 +151,7 @@ class ApiHandler(var ctx:Context) {
   }
 
   fun getLibraryPersonalized(libraryItemId:String, cb: (List<LibraryShelfType>?) -> Unit) {
-    getRequest("/api/libraries/$libraryItemId/personalized", null, null) {
+    getRequest("/api/libraries/$libraryItemId/personalized") {
       if (it.has("error")) {
         Log.e(tag, it.getString("error") ?: "getLibraryStats Failed")
         cb(null)
@@ -173,7 +168,7 @@ class ApiHandler(var ctx:Context) {
   }
 
   fun getLibraryItem(libraryItemId:String, cb: (LibraryItem?) -> Unit) {
-    getRequest("/api/items/$libraryItemId?expanded=1", null, null) {
+    getRequest("/api/items/$libraryItemId?expanded=1") {
       if (it.has("error")) {
         Log.e(tag, it.getString("error") ?: "getLibraryItem Failed")
         cb(null)
@@ -187,7 +182,7 @@ class ApiHandler(var ctx:Context) {
   fun getLibraryItemWithProgress(libraryItemId:String, episodeId:String?, cb: (LibraryItem?) -> Unit) {
     var requestUrl = "/api/items/$libraryItemId?expanded=1&include=progress"
     if (!episodeId.isNullOrEmpty()) requestUrl += "&episode=$episodeId"
-    getRequest(requestUrl, null, null) {
+    getRequest(requestUrl) {
       if (it.has("error")) {
         Log.e(tag, it.getString("error") ?: "getLibraryItemWithProgress Failed")
         cb(null)
@@ -199,7 +194,7 @@ class ApiHandler(var ctx:Context) {
   }
 
   fun getLibraryItems(libraryId:String, cb: (List<LibraryItem>) -> Unit) {
-    getRequest("/api/libraries/$libraryId/items?limit=100&minified=1", null, null) {
+    getRequest("/api/libraries/$libraryId/items?limit=100&minified=1") {
       val items = mutableListOf<LibraryItem>()
       if (it.has("results")) {
         val array = it.getJSONArray("results")
@@ -214,7 +209,7 @@ class ApiHandler(var ctx:Context) {
 
   fun getLibrarySeries(libraryId:String, cb: (List<LibrarySeriesItem>) -> Unit) {
     Log.d(tag, "Getting series")
-    getRequest("/api/libraries/$libraryId/series?minified=1&sort=name&limit=10000", null, null) {
+    getRequest("/api/libraries/$libraryId/series?minified=1&sort=name&limit=10000") {
       val items = mutableListOf<LibrarySeriesItem>()
       if (it.has("results")) {
         val array = it.getJSONArray("results")
@@ -230,7 +225,7 @@ class ApiHandler(var ctx:Context) {
   fun getLibrarySeriesItems(libraryId:String, seriesId:String, cb: (List<LibraryItem>) -> Unit) {
     Log.d(tag, "Getting items for series")
     val seriesIdBase64 = Base64.encodeToString(seriesId.toByteArray(), Base64.DEFAULT)
-    getRequest("/api/libraries/$libraryId/items?minified=1&sort=media.metadata.title&filter=series.${seriesIdBase64}&limit=1000", null, null) {
+    getRequest("/api/libraries/$libraryId/items?minified=1&sort=media.metadata.title&filter=series.${seriesIdBase64}&limit=1000") {
       val items = mutableListOf<LibraryItem>()
       if (it.has("results")) {
         val array = it.getJSONArray("results")
@@ -245,7 +240,7 @@ class ApiHandler(var ctx:Context) {
 
   fun getLibraryAuthors(libraryId:String, cb: (List<LibraryAuthorItem>) -> Unit) {
     Log.d(tag, "Getting series")
-    getRequest("/api/libraries/$libraryId/authors", null, null) {
+    getRequest("/api/libraries/$libraryId/authors") {
       val items = mutableListOf<LibraryAuthorItem>()
       if (it.has("authors")) {
         val array = it.getJSONArray("authors")
@@ -263,7 +258,7 @@ class ApiHandler(var ctx:Context) {
   fun getLibraryItemsFromAuthor(libraryId:String, authorId:String, cb: (List<LibraryItem>) -> Unit) {
     Log.d(tag, "Getting author items")
     val authorIdBase64 = Base64.encodeToString(authorId.toByteArray(), Base64.DEFAULT)
-    getRequest("/api/libraries/$libraryId/items?limit=1000&minified=1&filter=authors.${authorIdBase64}&sort=media.metadata.title&collapseseries=1", null, null) {
+    getRequest("/api/libraries/$libraryId/items?limit=1000&minified=1&filter=authors.${authorIdBase64}&sort=media.metadata.title&collapseseries=1") {
       val items = mutableListOf<LibraryItem>()
       if (it.has("results")) {
         val array = it.getJSONArray("results")
@@ -283,7 +278,7 @@ class ApiHandler(var ctx:Context) {
 
   fun getLibraryCollections(libraryId:String, cb: (List<LibraryCollection>) -> Unit) {
     Log.d(tag, "Getting collections")
-    getRequest("/api/libraries/$libraryId/collections?minified=1&sort=name&limit=1000", null, null) {
+    getRequest("/api/libraries/$libraryId/collections?minified=1&sort=name&limit=1000") {
       val items = mutableListOf<LibraryCollection>()
       if (it.has("results")) {
         val array = it.getJSONArray("results")
@@ -298,7 +293,7 @@ class ApiHandler(var ctx:Context) {
 
   fun getSearchResults(libraryId:String, queryString:String, cb: (LibraryItemSearchResultType?) -> Unit) {
     Log.d(tag, "Doing search for library $libraryId")
-    getRequest("/api/libraries/$libraryId/search?q=$queryString", null, null) {
+    getRequest("/api/libraries/$libraryId/search?q=$queryString") {
       if (it.has("error")) {
         Log.e(tag, it.getString("error") ?: "getSearchResults Failed")
         cb(null)
@@ -310,7 +305,7 @@ class ApiHandler(var ctx:Context) {
   }
 
   fun getAllItemsInProgress(cb: (List<ItemInProgress>) -> Unit) {
-    getRequest("/api/me/items-in-progress", null, null) {
+    getRequest("/api/me/items-in-progress") {
       val items = mutableListOf<ItemInProgress>()
       if (it.has("libraryItems")) {
         val array = it.getJSONArray("libraryItems")
@@ -324,17 +319,17 @@ class ApiHandler(var ctx:Context) {
     }
   }
 
+  /** The core picks the server and answers the session with the server's id and address */
   fun playLibraryItem(libraryItemId:String, episodeId:String?, playItemRequestPayload:PlayItemRequestPayload, cb: (PlaybackSession?) -> Unit) {
-    val payload = JSObject(jacksonMapper.writeValueAsString(playItemRequestPayload))
-
-    val endpoint = if (episodeId.isNullOrEmpty()) "/api/items/$libraryItemId/play" else "/api/items/$libraryItemId/play/$episodeId"
-    postRequest(endpoint, payload, null) {
+    val args = JSONObject()
+      .put("libraryItemId", libraryItemId)
+      .put("episodeId", episodeId ?: "")
+      .put("payload", JSONObject(jacksonMapper.writeValueAsString(playItemRequestPayload)))
+    coreCall("server.playItem", args, SERVER_WAIT_MS) {
       if (it.has("error")) {
         Log.e(tag, it.getString("error") ?: "Play Library Item Failed")
         cb(null)
       } else {
-        it.put("serverConnectionConfigId", DeviceManager.serverConnectionConfig?.id)
-        it.put("serverAddress", DeviceManager.serverAddress)
         val playbackSession = jacksonMapper.readValue<PlaybackSession>(it.toString())
         cb(playbackSession)
       }
@@ -347,7 +342,7 @@ class ApiHandler(var ctx:Context) {
     val args = serverArgs(null)
       .put("sessionId", sessionId)
       .put("syncData", JSONObject(jacksonMapper.writeValueAsString(syncData)))
-    coreCall("progress.sendSession", args, PROGRESS_WAIT_MS) {
+    coreCall("progress.sendSession", args, SERVER_WAIT_MS) {
       val error = it.getString("error")
       if (!error.isNullOrEmpty()) cb(false, error) else cb(true, null)
     }
@@ -355,7 +350,7 @@ class ApiHandler(var ctx:Context) {
 
   fun sendLocalProgressSync(playbackSession:PlaybackSession, cb: (Boolean, String?) -> Unit) {
     val args = serverArgs(null).put("session", JSONObject(jacksonMapper.writeValueAsString(playbackSession)))
-    coreCall("progress.sendLocalSession", args, PROGRESS_WAIT_MS) {
+    coreCall("progress.sendLocalSession", args, SERVER_WAIT_MS) {
       val error = it.getString("error")
       if (!error.isNullOrEmpty()) cb(false, error) else cb(true, null)
     }
@@ -367,7 +362,7 @@ class ApiHandler(var ctx:Context) {
       .put("libraryItemId", libraryItemId)
       .put("episodeId", episodeId)
       .put("updatePayload", updatePayload)
-    coreCall("progress.updateMedia", args, PROGRESS_WAIT_MS) {
+    coreCall("progress.updateMedia", args, SERVER_WAIT_MS) {
       Log.d(tag, "updateMediaProgress patched progress")
       cb()
     }
@@ -377,7 +372,7 @@ class ApiHandler(var ctx:Context) {
     val args = serverArgs(serverConnectionConfig)
       .put("libraryItemId", libraryItemId)
       .put("episodeId", episodeId)
-    coreCall("progress.getMedia", args, PROGRESS_WAIT_MS) {
+    coreCall("progress.getMedia", args, SERVER_WAIT_MS) {
       if (it.has("error")) {
         Log.e(tag, "getMediaProgress: Failed to get progress")
         cb(null)
@@ -391,7 +386,7 @@ class ApiHandler(var ctx:Context) {
   fun getPlaybackSession(playbackSessionId:String, cb: (PlaybackSession?) -> Unit) {
     Log.d(tag, "getPlaybackSession for $playbackSessionId for server ${DeviceManager.serverAddress}")
     val endpoint = "/api/session/$playbackSessionId"
-    getRequest(endpoint, null, null) {
+    getRequest(endpoint) {
       val err = it.getString("error")
       if (!err.isNullOrEmpty()) {
         cb(null)
@@ -403,37 +398,31 @@ class ApiHandler(var ctx:Context) {
 
   fun pingServer(config:ServerConnectionConfig, cb: (Boolean) -> Unit) {
     Log.d(tag, "pingServer: Pinging ${config.address}")
-    getRequest("/ping", pingClient, config) {
-      val success = it.getString("success")
-      if (success.isNullOrEmpty()) {
-        Log.d(tag, "pingServer: Ping ${config.address} Failed")
-        cb(false)
-      } else {
-        Log.d(tag, "pingServer: Ping ${config.address} Successful")
-        cb(true)
-      }
+    coreCall("server.ping", serverArgs(config), SERVER_WAIT_MS) {
+      val reachable = it.optBoolean("reachable", false)
+      Log.d(tag, "pingServer: Ping ${config.address} ${if (reachable) "Successful" else "Failed"}")
+      cb(reachable)
     }
   }
 
   fun closePlaybackSession(playbackSessionId:String, config:ServerConnectionConfig?, cb: (Boolean) -> Unit) {
     Log.d(tag, "closePlaybackSession: playbackSessionId=$playbackSessionId")
     val args = serverArgs(config).put("playbackSessionId", playbackSessionId)
-    coreCall("progress.closeSession", args, PROGRESS_WAIT_MS) {
+    coreCall("progress.closeSession", args, SERVER_WAIT_MS) {
       cb(it.getString("error").isNullOrEmpty())
     }
   }
 
   fun authorize(config:ServerConnectionConfig, cb: (MutableList<MediaProgress>?) -> Unit) {
     Log.d(tag, "authorize: Authorizing ${config.address}")
-    postRequest("/api/authorize", JSObject(), config) {
+    coreCall("server.authorize", serverArgs(config), SERVER_WAIT_MS) {
       val error = it.getString("error")
       if (!error.isNullOrEmpty()) {
         Log.d(tag, "authorize: Authorize ${config.address} Failed: $error")
         cb(null)
       } else {
         val mediaProgressList:MutableList<MediaProgress> = mutableListOf()
-        val user = it.getJSObject("user")
-        val mediaProgress = user?.getJSONArray("mediaProgress") ?: JSONArray()
+        val mediaProgress = it.getJSONArray("mediaProgress")
         for (i in 0 until mediaProgress.length()) {
           val mediaProg = jacksonMapper.readValue<MediaProgress>(mediaProgress.getJSONObject(i).toString())
           mediaProgressList.add(mediaProg)
