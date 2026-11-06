@@ -10,6 +10,7 @@ import { apiModule } from './modules/api'
 import { syncModule } from './modules/sync'
 import { progressModule } from './modules/progress'
 import { serverModule } from './modules/server'
+import { tickModule } from './modules/tick'
 
 export function createCore(transport, { log = console.log, now = () => Date.now() } = {}) {
   const bridge = createBridge(transport)
@@ -17,7 +18,8 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
   // The UI is a client of the core: it calls `core` methods through the AbsCore plugin and gets `ui` events (see modules)
   bridge.serve('core', 'ping', () => ({ pong: now() }))
   bridge.serve('core', 'version', () => ({ core: 1 }))
-  diagnosticsModule(bridge, { log, now })
+  const tick = tickModule(bridge, { now })
+  diagnosticsModule(bridge, { log, now, tick })
 
   /** Tell the visible UI something happened (it may not be open: native drops it) */
   const emitToUi = (event, data = {}) => bridge.call('ui', 'emit', { event, data }).catch(() => {})
@@ -34,5 +36,5 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
     return { ok: true }
   })
 
-  return { bridge, emitToUi, db, api, sync, progress, server }
+  return { bridge, emitToUi, db, api, sync, progress, server, tick }
 }
