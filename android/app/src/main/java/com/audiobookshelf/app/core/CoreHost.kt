@@ -63,6 +63,7 @@ object CoreHost {
   private fun registerDefaults(context: Context) {
     register("http", HttpConnector())
     register("wake", WakeConnector(context))
+    register("timer", TimerConnector())
     register("system", SystemConnector(context))
     register("ui", UiConnector())
     register("store", StoreConnector())

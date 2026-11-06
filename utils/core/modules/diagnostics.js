@@ -1,5 +1,36 @@
 /** Diagnostics served to native and the debug receiver (Phase 0 measurements, kept for later checks on the Pixel). */
-export function diagnosticsModule(bridge, { log = console.log, now = () => Date.now() } = {}) {
+export function diagnosticsModule(bridge, { log = console.log, now = () => Date.now(), tick } = {}) {
+  /**
+   * tickTest({everyMs, ticks}): two quick start/stop cycles of a timer that would fire every second (none may fire), then a
+   * timer of everyMs that stops after `ticks` ticks, then a wait for stray ticks. Logs lines starting with TICK.
+   */
+  bridge.serve('core', 'tickTest', async ({ everyMs = 15000, ticks = 2 } = {}) => {
+    const start = now()
+    const stray = []
+    for (let c = 0; c < 2; c++) {
+      const id = 'stray' + c
+      await tick.start(id, { everyMs: 1000, onTick: () => stray.push(id) })
+      await tick.stop(id)
+    }
+    log(`TICK cycles done at ${now() - start} ms`)
+    let n = 0
+    await tick.start('test', {
+      everyMs,
+      onTick: ({ atMs, t }) => {
+        n++
+        log(`TICK fire n=${n} asked=${atMs} firedAt=${t} lateMs=${t - atMs} coreLagMs=${now() - t}`)
+      }
+    })
+    await new Promise((resolve) => {
+      const poll = setInterval(() => {
+        if (n >= ticks) { clearInterval(poll); resolve() }
+      }, 100)
+    })
+    await tick.stop('test')
+    await new Promise((resolve) => setTimeout(resolve, 2500))
+    log(`TICK end strayFires=${stray.length} testFires=${n} running=${tick.isRunning('test')} elapsed=${now() - start} ms`)
+  })
+
   /** Timers: a sleep timer, a 15 s sync, `wake` alarms and `player` position ticks. Logs lines starting with TIMER. */
   bridge.serve('core', 'timerTest', ({ sleepMs = 60000, syncMs = 15000, wakeMs = 15000, durationMs = 300000 } = {}) => {
     const start = now()
