@@ -21,4 +21,5 @@ core.emitToUi('state', { playing: true })
 assert.deepStrictEqual([sent[1].c, sent[1].m, sent[1].a], ['ui', 'emit', '{"event":"state","data":{"playing":true}}'])
 
 core.bridge.handleEvent('wake', 'wake', '{"id":"w1","atMs":5,"exact":true}', 10) // no handler registered: ignored
+assert.strictEqual(typeof core.saver.restore, 'function') // the saver is registered (Phase 4b-2)
 console.log('ok   core serves ping and hello and relays events to the UI')
