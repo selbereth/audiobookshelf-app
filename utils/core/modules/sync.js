@@ -52,18 +52,12 @@ export function syncModule(bridge, { log = console.log, db, api }) {
     log(`sync: Finished syncing local media progress with server. ${upToDate} up-to-date, ${updated} updated`)
   }
 
-  const partial = (s) => ({
-    id: s.id, userId: s.userId, libraryItemId: s.libraryItemId, episodeId: s.episodeId ?? null, mediaType: s.mediaType,
-    displayTitle: s.displayTitle, displayAuthor: s.displayAuthor, duration: s.duration, playMethod: s.playMethod, startedAt: s.startedAt,
-    updatedAt: s.updatedAt, timeListening: s.timeListening, currentTime: s.currentTime, mediaPlayer: s.mediaPlayer
-  })
-
   /** Sends the sessions that were saved while offline. Returns an error text or null */
   async function sendSyncLocalSessions(config, sessions) {
     const info = await bridge.call('system', 'deviceInfo', {})
     const deviceInfo = { deviceId: info.deviceId, manufacturer: info.manufacturer, model: info.model, sdkVersion: info.sdk, clientVersion: info.versionName }
     log(`sync: Sending ${sessions.length} saved local playback sessions to server (${config.name})`)
-    const r = await call(config, { method: 'POST', endpoint: '/api/session/local-all', payload: { sessions: sessions.map(partial), deviceInfo } })
+    const r = await call(config, { method: 'POST', endpoint: '/api/session/local-all', payload: { sessions: sessions.map(rules.partialPlaybackSession), deviceInfo } })
     if (r.error) {
       log('sync: Failed to sync local sessions. (' + r.error + ')')
       return r.error

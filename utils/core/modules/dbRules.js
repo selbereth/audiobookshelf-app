@@ -252,6 +252,15 @@ export function sessionMediaItemId(s) {
   return s.episodeId ? `${s.libraryItemId}-${s.episodeId}` : s.libraryItemId || ''
 }
 
+/** The part of a PlaybackSession the server takes for a session (ApiHandler.createPartialPlaybackSession) */
+export function partialPlaybackSession(s) {
+  return {
+    id: s.id, userId: s.userId, libraryItemId: s.libraryItemId, episodeId: s.episodeId ?? null, mediaType: s.mediaType,
+    displayTitle: s.displayTitle, displayAuthor: s.displayAuthor, duration: s.duration, playMethod: s.playMethod, startedAt: s.startedAt,
+    updatedAt: s.updatedAt, timeListening: s.timeListening, currentTime: s.currentTime, mediaPlayer: s.mediaPlayer
+  }
+}
+
 export function playbackEvent(name, currentTime, syncResult, nowMs) {
   return {
     name, type: 'Playback', description: '', currentTime,
