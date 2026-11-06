@@ -11,6 +11,7 @@ import { syncModule } from './modules/sync'
 import { progressModule } from './modules/progress'
 import { serverModule } from './modules/server'
 import { tickModule } from './modules/tick'
+import { saverModule } from './modules/saver'
 
 export function createCore(transport, { log = console.log, now = () => Date.now() } = {}) {
   const bridge = createBridge(transport)
@@ -29,6 +30,16 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
   const sync = syncModule(bridge, { log, db, api })
   const progress = progressModule(bridge, { api, db })
   const server = serverModule(bridge, { api })
+  // Progress saving decisions (Phase 4b-2): registered, not wired to playback yet (Kotlin's MediaProgressSyncer still saves)
+  const saver = saverModule(bridge, {
+    progress,
+    db,
+    tick,
+    now,
+    log,
+    alert: (kind) => emitToUi('progressSync', { kind }),
+    emit: (event, data) => emitToUi(event, data)
+  })
 
   // The UI says hello when it opens; the core answers and also sends an event, so both directions can be seen
   bridge.serve('core', 'hello', () => {
@@ -36,5 +47,5 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
     return { ok: true }
   })
 
-  return { bridge, emitToUi, db, api, sync, progress, server, tick }
+  return { bridge, emitToUi, db, api, sync, progress, server, tick, saver }
 }

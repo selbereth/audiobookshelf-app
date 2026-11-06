@@ -11,6 +11,7 @@ export const COLLECTIONS = {
   localMediaProgress: 'localMediaProgress',
   mediaItemHistory: 'mediaItemHistory',
   playbackSession: 'playbackSession',
+  openSession: 'openSession', // the core's own record of the open session (saver.js), not read by Kotlin
   log: 'log'
 }
 
@@ -258,6 +259,60 @@ export function partialPlaybackSession(s) {
     id: s.id, userId: s.userId, libraryItemId: s.libraryItemId, episodeId: s.episodeId ?? null, mediaType: s.mediaType,
     displayTitle: s.displayTitle, displayAuthor: s.displayAuthor, duration: s.duration, playMethod: s.playMethod, startedAt: s.startedAt,
     updatedAt: s.updatedAt, timeListening: s.timeListening, currentTime: s.currentTime, mediaPlayer: s.mediaPlayer
+  }
+}
+
+/** LocalMediaProgress.kt:48 `isFinished = playbackSession.progress >= 0.99` (the finished rule of the local progress) */
+export const FINISHED_PROGRESS = 0.99
+
+export function isFinishedByProgress(progress) {
+  return progress >= FINISHED_PROGRESS
+}
+
+/** PlaybackSession.getTotalDuration (PlaybackSession.kt:150-154): the sum of the audio track durations */
+export function sessionTotalDuration(session) {
+  return (session.audioTracks || []).reduce((sum, track) => sum + track.duration, 0)
+}
+
+/** PlaybackSession.progress (PlaybackSession.kt:83-84): currentTime / total duration. NaN when the total is 0 */
+export function sessionProgress(session) {
+  return session.currentTime / sessionTotalDuration(session)
+}
+
+/** LocalMediaProgress.updateFromPlaybackSession (LocalMediaProgress.kt:44-50): an existing local progress takes the session's position */
+export function applyPlaybackSession(progress, session) {
+  const p = { ...progress }
+  p.currentTime = session.currentTime
+  p.progress = sessionProgress(session)
+  p.lastUpdate = session.updatedAt
+  p.isFinished = isFinishedByProgress(p.progress)
+  p.finishedAt = p.isFinished ? p.lastUpdate : null
+  return p
+}
+
+/**
+ * PlaybackSession.getNewLocalMediaProgress (PlaybackSession.kt:428-448): a new row is saved with isFinished false and
+ * finishedAt null whatever its progress (the Kotlin kept this; the next save applies the rule)
+ */
+export function newLocalMediaProgressFromSession(session) {
+  return {
+    id: localMediaProgressId(session.localLibraryItemId || '', session.localEpisodeId),
+    localLibraryItemId: session.localLibraryItemId || '',
+    localEpisodeId: session.localEpisodeId ?? null,
+    duration: sessionTotalDuration(session),
+    progress: sessionProgress(session),
+    currentTime: session.currentTime,
+    isFinished: false,
+    ebookLocation: null,
+    ebookProgress: null,
+    lastUpdate: session.updatedAt,
+    startedAt: session.startedAt,
+    finishedAt: null,
+    serverConnectionConfigId: session.serverConnectionConfigId ?? null,
+    serverAddress: session.serverAddress ?? null,
+    serverUserId: session.userId ?? null,
+    libraryItemId: session.libraryItemId ?? null,
+    episodeId: session.episodeId ?? null
   }
 }
 
