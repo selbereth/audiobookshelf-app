@@ -146,6 +146,30 @@ const tests = {
     assert.strictEqual(upd.localMediaProgress.ebookProgress, 0.3)
     assert.strictEqual(upd.localMediaProgress.lastUpdate, t.now())
   },
+  async 'setLocalMediaProgressFinished: creates the book progress finished, then toggles it back'() {
+    const t = setup()
+    t.put('localLibraryItems', 'l1', book('l1'))
+    const made = (await t.call('setLocalMediaProgressFinished', { localLibraryItemId: 'l1', localEpisodeId: '', isFinished: true })).localMediaProgress
+    assert.strictEqual(made.id, 'l1'); assert.strictEqual(made.isFinished, true); assert.strictEqual(made.progress, 1)
+    assert.strictEqual(made.duration, 100); assert.strictEqual(made.finishedAt, t.now()); assert.strictEqual(made.startedAt, t.now())
+    assert.strictEqual(made.serverConnectionConfigId, 'cfg'); assert.strictEqual(made.libraryItemId, 'li-l1')
+    t.tick(1000)
+    const back = (await t.call('setLocalMediaProgressFinished', { localLibraryItemId: 'l1', isFinished: false })).localMediaProgress
+    assert.strictEqual(back.isFinished, false); assert.strictEqual(back.progress, 0); assert.strictEqual(back.finishedAt, null)
+    assert.strictEqual(t.get('localMediaProgress', 'l1').isFinished, false)
+  },
+  async 'setLocalMediaProgressFinished: a podcast episode takes its duration and server episode id; the rule errors are answered'() {
+    const t = setup()
+    const pod = book('p1', { mediaType: 'podcast', media: { duration: 0, episodes: [{ id: 'e1', duration: 30, serverEpisodeId: 'se-1' }] } })
+    t.put('localLibraryItems', 'p1', pod)
+    const r = (await t.call('setLocalMediaProgressFinished', { localLibraryItemId: 'p1', localEpisodeId: 'e1', isFinished: true })).localMediaProgress
+    assert.strictEqual(r.id, 'p1-e1'); assert.strictEqual(r.duration, 30); assert.strictEqual(r.episodeId, 'se-1')
+    assert.deepStrictEqual(await t.call('setLocalMediaProgressFinished', { localLibraryItemId: 'p1', localEpisodeId: 'nope', isFinished: true }), { error: 'Podcast episode not found' })
+    assert.deepStrictEqual(await t.call('setLocalMediaProgressFinished', { localLibraryItemId: 'nope', isFinished: true }), { error: 'Library Item not found' })
+    assert.deepStrictEqual(await t.call('setLocalMediaProgressFinished', { localLibraryItemId: 'l9', localEpisodeId: 'e1', isFinished: true }), { error: 'Library Item not found' })
+    t.put('localLibraryItems', 'l2', book('l2'))
+    assert.deepStrictEqual(await t.call('setLocalMediaProgressFinished', { localLibraryItemId: 'l2', localEpisodeId: 'e1', isFinished: true }), { error: 'Invalid library item not a podcast' })
+  },
   async 'a server progress by web socket: creates for a local item, updates existing with a history event'() {
     const t = setup()
     t.put('localLibraryItems', 'l1', book('l1'))

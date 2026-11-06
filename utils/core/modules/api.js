@@ -5,7 +5,7 @@
  * `api.request({method, endpoint, payload, address, token, serverConnectionConfigId, timeoutMs})` answers what the Kotlin
  * ApiHandler always answered, so its callers did not change: the parsed JSON object, an array wrapped as {value: [...]}, "OK" as
  * {}, and {error: "..."} for every failure. The caller says which server (address, token, id): the core does not guess.
- * `api.refreshAuthTokens({serverConnectionConfigId})` -> {result: 'success' | 'rejected' | 'transient', accessToken?}.
+ * A caller that names no server gets the current one (resolveServer). `api.refreshAuthTokens({serverConnectionConfigId})` -> {result: 'success' | 'rejected' | 'transient', accessToken?}.
  */
 export function apiModule(bridge, { log = console.log, db }) {
   const DEFAULT_TIMEOUT = 60000
@@ -35,7 +35,22 @@ export function apiModule(bridge, { log = console.log, db }) {
     return { error: 'Invalid response body' }
   }
 
-  async function request({ method = 'GET', endpoint, payload, address, token, serverConnectionConfigId, timeoutMs = DEFAULT_TIMEOUT }) {
+  /**
+   * The server a call goes to: the one the caller names (address, token, serverConnectionConfigId), else the current one
+   * (the device's lastServerConnectionConfigId). Null when there is no current server.
+   */
+  async function resolveServer({ address, token, serverConnectionConfigId } = {}) {
+    if (address) return { address, token, serverConnectionConfigId }
+    const data = await db.methods.getDeviceData()
+    const config = data.serverConnectionConfigs.find((c) => c.id === data.lastServerConnectionConfigId)
+    if (!config) return null
+    return { address: config.address, token: config.token, serverConnectionConfigId: config.id }
+  }
+
+  async function request({ method = 'GET', endpoint, payload, timeoutMs = DEFAULT_TIMEOUT, ...named }) {
+    const srv = await resolveServer(named)
+    if (!srv) return { error: 'No server connection' }
+    const { address, token, serverConnectionConfigId } = srv
     const url = address + endpoint
     const body = payload === undefined || payload === null ? null : JSON.stringify(payload)
     let r = await send({ method, url, token, body, timeoutMs })
@@ -113,5 +128,5 @@ export function apiModule(bridge, { log = console.log, db }) {
   bridge.serve('core', 'api.request', (args) => request(args || {}))
   bridge.serve('core', 'api.refreshAuthTokens', (args) => refreshAuthTokens(args || {}))
 
-  return { request, refreshAuthTokens }
+  return { request, refreshAuthTokens, resolveServer }
 }

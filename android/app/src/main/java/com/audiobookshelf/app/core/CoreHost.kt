@@ -1,5 +1,6 @@
 package com.audiobookshelf.app.core
 
+import com.audiobookshelf.app.managers.DbManager
 import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Handler
@@ -51,6 +52,9 @@ object CoreHost {
     main.post {
       if (webView != null) return@post
       app = context.applicationContext
+      // The core reads the device data from the store, so every process that starts the core opens the database the way the
+      // app does (idempotent). Without this a process started from a service, not the UI, had no store.
+      DbManager.initialize(app!!)
       registerDefaults(app!!)
       create()
     }

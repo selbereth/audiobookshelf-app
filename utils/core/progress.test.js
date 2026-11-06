@@ -1,10 +1,9 @@
 import assert from 'assert'
-import { dbModule } from './modules/db'
 import { apiModule } from './modules/api'
 import { progressModule } from './modules/progress'
 
 // Fake native: records every http request and answers with the scripted server (handler gets {method,url,headers,body,timeoutMs})
-function setup(server) {
+function setup(server, { localFinished = null, current = 'c1' } = {}) {
   const served = {}, requests = []
   const bridge = {
     serve: (c, m, fn) => { served[m] = fn },
@@ -13,9 +12,15 @@ function setup(server) {
       throw new Error('unexpected ' + connector + '.' + method)
     }
   }
-  const db = dbModule(bridge, { log: () => {}, now: () => 1, emitToUi: () => {} })
+  // The local rule is db's (tested in db.test.js); here a scripted one, and the device data that names the current server
+  const db = {
+    methods: {
+      getDeviceData: async () => ({ lastServerConnectionConfigId: current, serverConnectionConfigs: [{ id: 'c1', address: 'https://s', token: 'tok' }] }),
+      setLocalMediaProgressFinished: async (a) => localFinished || { localMediaProgress: { id: 'li-1', isFinished: a.isFinished, serverConnectionConfigId: 'c1', libraryItemId: 'li-1', episodeId: null } }
+    }
+  }
   const api = apiModule(bridge, { log: () => {}, db })
-  progressModule(bridge, { api })
+  progressModule(bridge, { api, db })
   const call = (m, args) => served['progress.' + m](args)
   return { call, requests, served }
 }
@@ -30,9 +35,31 @@ const session = {
 }
 
 const tests = {
-  async 'the module serves the five progress methods'() {
+  async 'the module serves the progress methods'() {
     const t = setup(() => ok({}))
-    assert.deepStrictEqual(Object.keys(t.served).filter((m) => m.startsWith('progress.')).sort(), ['progress.closeSession', 'progress.getMedia', 'progress.sendLocalSession', 'progress.sendSession', 'progress.updateMedia'])
+    assert.deepStrictEqual(Object.keys(t.served).filter((m) => m.startsWith('progress.')).sort(), ['progress.closeSession', 'progress.getMedia', 'progress.sendLocalSession', 'progress.sendSession', 'progress.updateLocalFinished', 'progress.updateMedia'])
+  },
+  async 'updateLocalFinished: the server is sent the flag when the progress belongs to the current server'() {
+    const t = setup(() => ok('OK'))
+    const r = await t.call('updateLocalFinished', { localLibraryItemId: 'li-1', isFinished: true })
+    assert.deepStrictEqual(r, { local: true, server: true, localMediaProgress: { id: 'li-1', isFinished: true, serverConnectionConfigId: 'c1', libraryItemId: 'li-1', episodeId: null } })
+    assert.strictEqual(t.requests[0].method, 'PATCH'); assert.strictEqual(t.requests[0].url, 'https://s/api/me/progress/li-1')
+    assert.deepStrictEqual(JSON.parse(t.requests[0].body), { isFinished: true })
+  },
+  async 'updateLocalFinished: no server call for progress of another server, and the local answer stays'() {
+    const t = setup(() => ok('OK'), { current: 'c2' })
+    const r = await t.call('updateLocalFinished', { localLibraryItemId: 'li-1', isFinished: false })
+    assert.strictEqual(r.server, false); assert.strictEqual(r.local, true); assert.strictEqual(t.requests.length, 0)
+  },
+  async 'updateLocalFinished: a failed server update is reported as server false, the local progress is kept'() {
+    const t = setup(() => fail)
+    const r = await t.call('updateLocalFinished', { localLibraryItemId: 'li-1', isFinished: true })
+    assert.strictEqual(r.server, false); assert.strictEqual(r.localMediaProgress.isFinished, true)
+  },
+  async 'updateLocalFinished: the local rule error is passed on without a server call'() {
+    const t = setup(() => ok('OK'), { localFinished: { error: 'Library Item not found' } })
+    assert.deepStrictEqual(await t.call('updateLocalFinished', { localLibraryItemId: 'nope', isFinished: true }), { error: 'Library Item not found' })
+    assert.strictEqual(t.requests.length, 0)
   },
   async 'sendSession: POST the sync payload to the session, answers {}'() {
     const t = setup(() => ok('OK'))

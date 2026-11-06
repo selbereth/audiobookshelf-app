@@ -218,6 +218,38 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
     return { localMediaProgress: progress }
   }, { write: true })
 
+  /** Marks a local book or episode finished (or not). Creates its local progress when there is none. The server part is progress.js */
+  define('setLocalMediaProgressFinished', async ({ localLibraryItemId, localEpisodeId, isFinished }) => {
+    const libraryId = localLibraryItemId || ''
+    const episode = nonEmpty(localEpisodeId)
+    const progressId = rules.localMediaProgressId(libraryId, episode)
+    const finished = isFinished === true
+    const nowMs = now()
+    let progress = await store.get(C.localMediaProgress, progressId)
+    if (progress) {
+      progress = rules.applyIsFinished(progress, finished, nowMs)
+    } else {
+      const item = await store.get(C.localLibraryItems, libraryId)
+      if (!item) return { error: 'Library Item not found' }
+      if (!rules.isPodcast(item) && episode) return { error: 'Invalid library item not a podcast' }
+      let duration = item.media.duration || 0
+      let serverEpisodeId = null
+      if (episode) {
+        const ep = (item.media.episodes || []).find((e) => e.id === episode)
+        if (!ep) return { error: 'Podcast episode not found' }
+        duration = ep.duration || 0
+        serverEpisodeId = ep.serverEpisodeId ?? null
+      }
+      progress = rules.newLocalMediaProgress(item, {
+        id: progressId, localEpisodeId: episode, episodeId: serverEpisodeId, duration,
+        progress: finished ? 1.0 : 0.0, currentTime: 0, isFinished: finished, lastUpdate: nowMs,
+        startedAt: finished ? nowMs : 0, finishedAt: finished ? nowMs : null
+      })
+    }
+    await store.put(C.localMediaProgress, progress.id, progress)
+    return { localMediaProgress: progress }
+  }, { write: true })
+
   /** A server progress arrived by web socket: update the matching local progress, or create it for a local item */
   define('syncServerMediaProgressWithLocalMediaProgress', async ({ mediaProgress, localLibraryItemId, localEpisodeId, localMediaProgressId }) => {
     const episode = nonEmpty(localEpisodeId)
