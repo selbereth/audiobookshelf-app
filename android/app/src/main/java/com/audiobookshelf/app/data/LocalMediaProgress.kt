@@ -41,21 +41,6 @@ class LocalMediaProgress(
   }
 
   @JsonIgnore
-  fun updateIsFinished(finished:Boolean) {
-    if (isFinished != finished) { // If finished changed then set progress
-      progress = if (finished) 1.0 else 0.0
-    }
-
-    if (finished) {
-      currentTime = 0.0
-    }
-
-    isFinished = finished
-    lastUpdate = System.currentTimeMillis()
-    finishedAt = if (isFinished) lastUpdate else null
-  }
-
-  @JsonIgnore
   fun updateFromPlaybackSession(playbackSession:PlaybackSession) {
     currentTime = playbackSession.currentTime
     progress = playbackSession.progress
@@ -71,16 +56,4 @@ class LocalMediaProgress(
     this.ebookLocation = ebookLocation
   }
 
-  @JsonIgnore
-  fun updateFromServerMediaProgress(serverMediaProgress:MediaProgress) {
-    isFinished = serverMediaProgress.isFinished
-    progress = serverMediaProgress.progress
-    currentTime = serverMediaProgress.currentTime
-    ebookProgress = serverMediaProgress.ebookProgress
-    ebookLocation = serverMediaProgress.ebookLocation
-    duration = serverMediaProgress.duration
-    lastUpdate = serverMediaProgress.lastUpdate
-    finishedAt = serverMediaProgress.finishedAt
-    startedAt = serverMediaProgress.startedAt
-  }
 }
