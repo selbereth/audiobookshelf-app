@@ -25,8 +25,14 @@ class CoreDebugReceiver : BroadcastReceiver() {
       "call" -> {
         val method = intent.getStringExtra("method") ?: ""
         val started = System.currentTimeMillis()
-        CoreHost.callUp("core", method, JSONObject(intent.getStringExtra("args") ?: "{}"), 60000) { ok, json ->
-          Log.i("CoreDebug", "call $method ok=$ok ${System.currentTimeMillis() - started} ms ${json.take(intent.getIntExtra("max", 300))}")
+        try {
+          CoreHost.callUp("core", method, JSONObject(intent.getStringExtra("args") ?: "{}"), 60000) { ok, json ->
+            Log.i("CoreDebug", "call $method ok=$ok ${System.currentTimeMillis() - started} ms ${json.take(intent.getIntExtra("max", 300))}")
+          }
+        } catch (e: Exception) {
+          // Bad --es args (not JSON) must not crash the app process: log and drop the call
+          Log.e("CoreDebug", "call $method rejected, bad args '${intent.getStringExtra("args")}': ${e.message}")
+          return
         }
       }
       "kotlinView" -> Thread {
