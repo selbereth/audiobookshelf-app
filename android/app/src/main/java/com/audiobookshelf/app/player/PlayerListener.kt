@@ -103,7 +103,7 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
         // Handles auto-starting sleep timer and resetting sleep timer
         playerNotificationService.sleepTimerManager.handleMediaPlayEvent(it.id)
 
-        player.volume = 1F // Volume on sleep timer might have decreased this
+        if (!com.audiobookshelf.app.core.CoreSwitch.coreSleep) player.volume = 1F // Volume on sleep timer might have decreased this (the core does it when its switch is on)
 
         playerNotificationService.mediaProgressSyncer.play(it)
       }

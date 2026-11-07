@@ -23,6 +23,17 @@ class CoreDebugReceiver : BroadcastReceiver() {
         CoreSwitch.write(app, intent.getBooleanExtra("on", false))
         Log.i("CoreDebug", "coreSaver written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
       }
+      // Phase 5 switch: the core's sleep timer. Applies at the next start of the app, like coreSaver
+      "coreSleep" -> {
+        CoreSwitch.writeSleep(app, intent.getBooleanExtra("on", false))
+        Log.i("CoreDebug", "coreSleep written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
+      }
+      // Sleep timer calls to the core: --es method set|increase|decrease|cancel|resend, --el ms, --ez chapter
+      "sleep" -> {
+        val args = JSONObject().put("ms", intent.getLongExtra("ms", 0L)).put("isChapterTime", intent.getBooleanExtra("chapter", false)).put("sessionId", "debug")
+        val method = intent.getStringExtra("method") ?: ""
+        CoreSleep.call(method, args) { ok, json -> Log.i("CoreDebug", "sleep.$method ok=$ok $json") }
+      }
       "paperCheck" -> Thread { PaperRoundTripCheck.run(app) }.start()
       "threads" -> Thread.getAllStackTraces().forEach { (t, st) ->
         if (t.name.startsWith("Thread-") || t.name == "main") Log.i("ThreadDump", "${t.name} ${t.state}\n" + st.take(14).joinToString("\n") { "    at $it" })

@@ -9,7 +9,7 @@
 </template>
 
 <script>
-import { AbsAudioPlayer, AbsLogger } from '@/plugins/capacitor'
+import { AbsAudioPlayer, AbsLogger, onCore } from '@/plugins/capacitor'
 import { Dialog } from '@capacitor/dialog'
 import CellularPermissionHelpers from '@/mixins/cellularPermissionHelpers'
 import ttsSession from '@/utils/tts/ttsSession'
@@ -34,6 +34,7 @@ export default {
       onLocalMediaProgressUpdateListener: null,
       onSleepTimerEndedListener: null,
       onSleepTimerSetListener: null,
+      onCoreRemove: null, // Phase 5: the core's sleep timer events (only sent while its switch is on)
       onMediaPlayerChangedListener: null,
       sleepInterval: null,
       currentEndOfChapterTime: 0,
@@ -463,6 +464,10 @@ export default {
     this.onLocalMediaProgressUpdateListener = await AbsAudioPlayer.addListener('onLocalMediaProgressUpdate', this.onLocalMediaProgressUpdate)
     this.onSleepTimerEndedListener = await AbsAudioPlayer.addListener('onSleepTimerEnded', this.onSleepTimerEnded)
     this.onSleepTimerSetListener = await AbsAudioPlayer.addListener('onSleepTimerSet', this.onSleepTimerSet)
+    this.onCoreRemove = await onCore((event, data) => {
+      if (event === 'sleepTimerSet') this.onSleepTimerSet(data)
+      else if (event === 'sleepTimerEnded') this.onSleepTimerEnded(data)
+    })
     this.onMediaPlayerChangedListener = await AbsAudioPlayer.addListener('onMediaPlayerChanged', this.onMediaPlayerChanged)
 
     this.playbackSpeed = this.$store.getters['user/getUserSetting']('playbackRate')
@@ -482,6 +487,7 @@ export default {
     this.onLocalMediaProgressUpdateListener?.remove()
     this.onSleepTimerEndedListener?.remove()
     this.onSleepTimerSetListener?.remove()
+    this.onCoreRemove?.()
     this.onMediaPlayerChangedListener?.remove()
 
     this.$eventBus.$off('abs-ui-ready', this.onReady)

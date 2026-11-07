@@ -46,9 +46,13 @@ const onCore = createCore(
 const flagId = on[0].id
 assert.deepStrictEqual([on[0].c, on[0].m], ['system', 'flags'])
 onCore.bridge.handleReply(flagId, true, '{"coreSaver":true}')
+// The sleep timer reads the same switch (system.flags) at its own start: it is answered here with its switch off
+assert.deepStrictEqual([on[1].c, on[1].m], ['system', 'flags'])
+onCore.bridge.handleReply(on[1].id, true, '{"coreSleep":false}')
 await new Promise((r) => setTimeout(r, 10))
-assert.deepStrictEqual([on[1].c, on[1].m], ['system', 'network'], 'the network is read at start when the switch is on')
-onCore.bridge.handleReply(on[1].id, true, '{"connected":true,"metered":false,"wifi":true,"validated":true}')
+const net = on.find((x) => x.c === 'system' && x.m === 'network')
+assert.ok(net, 'the network is read at start when the switch is on')
+onCore.bridge.handleReply(net.id, true, '{"connected":true,"metered":false,"wifi":true,"validated":true}')
 await new Promise((r) => setTimeout(r, 10))
-assert.deepStrictEqual([on[2].c, on[2].m], ['player', 'getState'], 'then the open session is restored from native')
+assert.deepStrictEqual([on[3].c, on[3].m], ['player', 'getState'], 'then the open session is restored from native')
 console.log('ok   with the switch on the core reads the network and asks native for the open session at start')

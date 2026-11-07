@@ -74,6 +74,8 @@ object CoreHost {
     register("secure", SecureConnector(context))
     register("files", FilesConnector(context))
     register("device", DeviceConnector())
+    register("sensor", SensorConnector)
+    register("feedback", FeedbackConnector(context))
   }
 
   @SuppressLint("SetJavaScriptEnabled")
