@@ -46,6 +46,8 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
   // Sleep timer (Phase 5): start() reads the switch system.flags {coreSleep}, default off. While it is off Kotlin's SleepTimerManager runs
   const sleep = sleepModule(bridge, { tick, db, now, log, emitToUi: (event, data) => emitToUi(event, data) })
   sleep.start()
+  // The UI mirror of the device data (Phase 6): reads the switch system.flags {coreUi}, default off
+  db.start()
 
   // The UI says hello when it opens; the core answers and also sends an event, so both directions can be seen
   bridge.serve('core', 'hello', () => {

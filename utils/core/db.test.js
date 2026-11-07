@@ -3,7 +3,7 @@ import { dbModule } from './modules/db'
 import * as rules from './modules/dbRules'
 
 // A fake native side: in-memory store, secure, files, device
-function setup({ existing = {} } = {}) {
+function setup({ existing = {}, coreUi = false } = {}) {
   const data = {} // collection -> {key: json string}
   const secure = {}
   const deviceCalls = []
@@ -27,6 +27,7 @@ function setup({ existing = {} } = {}) {
       }
       if (connector === 'files' && method === 'exists') return { exists: existing[a.contentUrl || a.path] !== false }
       if (connector === 'device') { deviceCalls.push(a); return }
+      if (connector === 'system' && method === 'flags') return { coreSaver: false, coreSleep: false, coreUi }
       throw new Error('unexpected ' + connector + '.' + method)
     }
   }
@@ -246,6 +247,38 @@ const tests = {
     const device = t.get('device', 'data')
     assert.strictEqual(device.deviceSettings.jumpBackwardsTime, 20)
     assert.strictEqual(device.serverConnectionConfigs.length, 1)
+  },
+  async 'UI mirror: off by default, nothing is sent to the UI for a device write'() {
+    const t = setup()
+    assert.strictEqual(await t.mod.start(), false)
+    assert.deepStrictEqual(await t.call('mirrorSwitch'), { coreUi: false })
+    await t.call('updateDeviceSettings', { ...rules.defaultDeviceSettings(), jumpBackwardsTime: 25 })
+    await t.call('setCurrentServerConnectionConfig', { id: null, userId: 'u', username: 'sam', version: '1', token: 't', address: 'https://s' })
+    assert.deepStrictEqual(t.ui, [], 'with the switch off the UI is told nothing')
+  },
+  async 'UI mirror: on, every device write is sent to the UI with the saved data'() {
+    const t = setup({ coreUi: true })
+    assert.strictEqual(await t.mod.start(), true)
+    assert.deepStrictEqual(await t.call('mirrorSwitch'), { coreUi: true })
+    await t.call('updateDeviceSettings', { ...rules.defaultDeviceSettings(), jumpBackwardsTime: 25 })
+    const cfg = await t.call('setCurrentServerConnectionConfig', { id: null, userId: 'u', username: 'sam', version: '1', token: 't', address: 'https://s' })
+    await t.call('logout')
+    const mirrored = t.ui.filter(([e]) => e === 'deviceChanged').map(([, d]) => d.deviceData)
+    assert.strictEqual(mirrored.length, 3, 'one event per save')
+    assert.strictEqual(mirrored[0].deviceSettings.jumpBackwardsTime, 25)
+    assert.strictEqual(mirrored[1].lastServerConnectionConfigId, cfg.id)
+    assert.strictEqual(mirrored[1].serverConnectionConfigs.length, 1)
+    assert.strictEqual(mirrored[2].lastServerConnectionConfigId, null, 'the sign-out is seen by the UI')
+    assert.deepStrictEqual(mirrored[2], t.get('device', 'data'), 'the UI gets exactly what was saved')
+  },
+  async 'UI mirror: a refused refresh that signs out the current server reaches the UI as a device change too'() {
+    const t = setup({ coreUi: true })
+    await t.mod.start()
+    const cfg = await t.call('setCurrentServerConnectionConfig', { id: null, userId: 'u', username: 'sam', version: '1', token: 't', address: 'https://s' })
+    t.ui.length = 0
+    await t.call('clearSession', { serverConnectionConfigId: cfg.id })
+    assert.deepStrictEqual(t.ui.map(([e]) => e), ['deviceChanged', 'onTokenRefreshFailure'])
+    assert.strictEqual(t.ui[0][1].deviceData.lastServerConnectionConfigId, null)
   },
   async 'base64 id matches Android URL_SAFE'() {
     assert.strictEqual(rules.base64Id('a?b>c@d', (s) => Buffer.from(s, 'binary').toString('base64')), 'YT9iPmNAZA==')

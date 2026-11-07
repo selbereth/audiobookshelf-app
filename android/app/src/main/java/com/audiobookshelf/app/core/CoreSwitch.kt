@@ -12,6 +12,7 @@ object CoreSwitch {
   private const val PREFS = "core"
   private const val KEY = "coreSaver"
   private const val SLEEP_KEY = "coreSleep"
+  private const val UI_KEY = "coreUi"
 
   @Volatile
   var coreSaver = false
@@ -22,10 +23,23 @@ object CoreSwitch {
   var coreSleep = false
     private set
 
+  /**
+   * Phase 6: the UI mirrors the device data the core saves (the `deviceChanged` event). Off (default): the UI keeps its own copy as before.
+   * Read at core start like the others. Nothing else changes: the same saves happen either way.
+   */
+  @Volatile
+  var coreUi = false
+    private set
+
   fun load(context: Context) {
     val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     coreSaver = prefs.getBoolean(KEY, false)
     coreSleep = prefs.getBoolean(SLEEP_KEY, false)
+    coreUi = prefs.getBoolean(UI_KEY, false)
+  }
+
+  fun writeUi(context: Context, on: Boolean) {
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(UI_KEY, on).commit()
   }
 
   fun writeSleep(context: Context, on: Boolean) {
