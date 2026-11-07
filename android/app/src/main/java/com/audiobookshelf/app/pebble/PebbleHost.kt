@@ -85,6 +85,9 @@ object PebbleHost {
    * fails or does not answer within [timeoutMs].
    */
   suspend fun call(context: Context, function: String, args: JSONArray = JSONArray(), timeoutMs: Long = 120_000): String? {
+    // Phase 7: with the corePebble switch on, the core runs the same logic and this page stays silent (no double messages)
+    com.audiobookshelf.app.core.CoreSwitch.load(context)
+    if (com.audiobookshelf.app.core.CoreSwitch.corePebble) return CorePebble.call(context, function, args, timeoutMs)
     start(context)
     loaded.await()
     val id = nextId.getAndIncrement()
