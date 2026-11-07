@@ -1,7 +1,8 @@
 /**
  * Progress saving decisions (Phase 4b-2; design note audiobookshelf-core-refactor-design-progress-tick, step 5).
- * Ported from android/app/src/main/java/com/audiobookshelf/app/media/MediaProgressSyncer.kt, which still runs playback:
- * this module is NOT wired to the player yet. Each rule names its Kotlin source (file:line).
+ * Ported from android/app/src/main/java/com/audiobookshelf/app/media/MediaProgressSyncer.kt. Each rule names its Kotlin
+ * source (file:line). It runs only while the switch `system.flags` {coreSaver} is on (start() reads it); while it is off
+ * Kotlin's MediaProgressSyncer saves and sends, and this module does nothing.
  *
  * Input: `player.state` events {reason, sessionId, playing, positionSec, error?} and `session/opened` {session}; the tick
  * (tick.js, every TICK_MS while playing); `system/network` {connected, metered}.
@@ -53,9 +54,15 @@ export function saverModule(bridge, {
   let failedSyncs = 0 // Kotlin failedSyncs (:39)
   let net = { connected: false, metered: true } // no network event yet: not connected
   let queue = Promise.resolve() // every event and tick runs here, one after the other
+  // The switch (system.flags coreSaver), set by start(). Off until the answer says on: nothing below runs while it is off.
+  let gate = Promise.resolve(false)
 
+  // Runs fn in order, but only while the switch is on (Kotlin keeps saving while it is off)
   const enqueue = (fn) => {
-    queue = queue.then(fn).catch((e) => log('saver: ' + (e && e.message)))
+    queue = queue
+      .then(() => gate)
+      .then((on) => (on ? fn() : undefined))
+      .catch((e) => log('saver: ' + (e && e.message)))
     return queue
   }
 
@@ -65,12 +72,38 @@ export function saverModule(bridge, {
     })
   const stopTimer = () => tick.stop(TICK_ID)
 
-  // ---- events from native
-  bridge.on('system', 'network', (d) => {
-    net = { connected: d.connected === true, metered: d.metered !== false }
-  })
-  bridge.on('session', 'opened', (d) => enqueue(() => open(d.session)))
-  bridge.on('player', 'state', (d, t) => enqueue(() => onState(d, t ?? now())))
+  /**
+   * Reads the switch and subscribes to native's events. The subscriptions are always made (so no event is missed while the
+   * answer is on its way), but every handler is a no-op unless the switch is on. When it is on, the network is read and the
+   * open session is restored (after a core restart). Call once, when the core is created.
+   */
+  function start() {
+    gate = bridge
+      .call('system', 'flags', {})
+      .then((f) => f?.coreSaver === true, (e) => {
+        log('saver: the switch could not be read, the core saver stays off: ' + (e && e.message))
+        return false
+      })
+    bridge.on('system', 'network', (d) => {
+      net = { connected: d.connected === true, metered: d.metered !== false }
+    })
+    bridge.on('session', 'opened', (d) => enqueue(() => open(d.session)))
+    bridge.on('player', 'state', (d, t) => enqueue(() => onState(d, t ?? now())))
+    return enqueue(async () => {
+      await refreshNetwork()
+      await doRestore()
+    })
+  }
+
+  /** The network as native sees it now (events only come on a change) */
+  async function refreshNetwork() {
+    try {
+      const d = await bridge.call('system', 'network', {})
+      if (d) net = { connected: d.connected === true, metered: d.metered !== false }
+    } catch (e) {
+      log('saver: system.network failed: ' + (e && e.message))
+    }
+  }
 
   async function open(next) {
     if (session && session.id === next.id) return
@@ -302,30 +335,30 @@ export function saverModule(bridge, {
   }
 
   /**
-   * After a core restart: the native player is asked for its state and the open session is read back from the core's record.
-   * Not called by the core yet (the switch-over step calls it once the Kotlin player has the connectors).
+   * After a core restart: the native player is asked for its state and the open session is read back from the core's record
+   * (or, with no record, from the session JSON native sends). Runs from start() when the switch is on.
    */
-  function restore() {
-    return enqueue(async () => {
-      if (session) return
-      let st
-      try {
-        st = await bridge.call('player', 'getState', {})
-      } catch (e) {
-        return log('saver: player.getState failed: ' + e.message)
-      }
-      if (!st || !st.live || !st.sessionId) return
-      const rec = await db.store.get(C.openSession, st.sessionId)
-      if (!rec) return log('saver: no open session record for ' + st.sessionId)
-      session = rec.session
-      session.currentTime = st.positionSec ?? session.currentTime
-      unsentSec = rec.unsentSec || 0
-      if (st.playing) startWindow(now()) // the seconds while the core was down are not counted (open question)
-    })
+  async function doRestore() {
+    if (session) return
+    let st
+    try {
+      st = await bridge.call('player', 'getState', {})
+    } catch (e) {
+      return log('saver: player.getState failed: ' + e.message)
+    }
+    if (!st || !st.live || !st.sessionId) return
+    const rec = (await db.store.get(C.openSession, st.sessionId)) ||
+      (st.session && st.session.id === st.sessionId ? { session: st.session, unsentSec: 0 } : null)
+    if (!rec) return log('saver: no open session for ' + st.sessionId)
+    session = clone(rec.session)
+    session.currentTime = st.positionSec ?? session.currentTime
+    unsentSec = rec.unsentSec || 0
+    if (st.playing) startWindow(now()) // the seconds while the core was down are not counted (open question)
   }
 
   return {
-    restore,
+    start,
+    restore: () => enqueue(doRestore),
     /** Resolves when every event and tick received so far has been handled */
     idle: () => queue,
     snapshot: () => ({ sessionId: session ? session.id : null, running, unsentSec, failedSyncs })

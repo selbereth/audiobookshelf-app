@@ -8,7 +8,7 @@ const T0 = 1_000_000
 const clone = (o) => JSON.parse(JSON.stringify(o))
 
 // Fake native (player, timer, system, session connectors) and the JS modules around the saver
-function setup({ net = { connected: true, metered: false }, store = {}, native = {}, legacy = false, timeoutMs = 5 } = {}) {
+function setup({ net = { connected: true, metered: false }, store = {}, native = {}, legacy = false, timeoutMs = 5, coreSaver = true } = {}) {
   const clock = { t: T0 }
   const ctl = { serverError: null, localError: null, closeError: null, serverId: 'c1' }
   const nat = { playing: true, positionSec: 0, sessionId: 'ps1', silent: false, live: true, ...native }
@@ -19,9 +19,14 @@ function setup({ net = { connected: true, metered: false }, store = {}, native =
   const events = []
   const sent = { session: [], local: [], close: [] }
   let lastAt = null
+  let netNow = net // what system.network answers (native's current network)
   const bridge = {
     call(connector, method, args) {
       calls.push({ connector, method, args })
+      if (connector === 'system' && method === 'flags') {
+        return coreSaver === 'error' ? Promise.reject(new Error('no answer')) : Promise.resolve({ coreSaver })
+      }
+      if (connector === 'system' && method === 'network') return Promise.resolve(netNow)
       if (connector === 'timer') {
         if (method === 'schedule') lastAt = args.atMs
         return Promise.resolve({ ok: true })
@@ -31,7 +36,7 @@ function setup({ net = { connected: true, metered: false }, store = {}, native =
         return Promise.resolve({ playing: nat.playing, positionSec: nat.positionSec, sessionId: nat.sessionId, rate: 1, atMs: clock.t })
       }
       if (connector === 'player' && method === 'getState') {
-        return Promise.resolve({ live: nat.live, playing: nat.playing, positionSec: nat.positionSec, sessionId: nat.sessionId, rate: 1 })
+        return Promise.resolve({ live: nat.live, playing: nat.playing, positionSec: nat.positionSec, sessionId: nat.sessionId, rate: 1, session: nat.session ?? null })
       }
       return Promise.reject(new Error('unexpected ' + connector + '.' + method))
     },
@@ -68,6 +73,7 @@ function setup({ net = { connected: true, metered: false }, store = {}, native =
     progress, db, tick, now: () => clock.t, log: (m) => logs.push(m), alert: (k) => alerts.push(k),
     emit: () => {}, legacyTimeListening: legacy, positionTimeoutMs: timeoutMs
   })
+  saver.start()
   fire('system', 'network', net)
   const t = {
     clock, ctl, native: nat, store, sent, alerts, events, logs, calls, saver,
@@ -75,7 +81,7 @@ function setup({ net = { connected: true, metered: false }, store = {}, native =
     // A native event at time `at` (default: now)
     state: (d, at = clock.t) => fire('player', 'state', d, at),
     opened: (session) => fire('session', 'opened', { session }, clock.t),
-    net: (n) => fire('system', 'network', n, clock.t),
+    net: (n) => { netNow = n; fire('system', 'network', n, clock.t) },
     // The 15 s tick fires at `at` (the time native fired it); the core asked for `lastAt`
     tickAt: (at) => { clock.t = at; fire('timer', 'tick', { id: 'progress', atMs: lastAt }, at) },
     schedules: () => calls.filter((c) => c.connector === 'timer' && c.method === 'schedule').map((c) => c.args),
@@ -424,10 +430,54 @@ const tests = {
     assert.strictEqual(correct.store.playbackSession.ps1.timeListening, 60)
   },
 
-  async 'the saver is registered in the core and nothing is wired to playback yet (no player events are sent by native yet)'() {
-    const t = setup()
-    assert.strictEqual(typeof t.saver.restore, 'function')
-    assert.strictEqual(t.calls.length, 0, 'the saver makes no call until native sends an event')
+  async 'switch off (the default): the saver reads the switch and nothing else; playback events, ticks and the network are ignored'() {
+    const t = setup({ coreSaver: false })
+    await t.idle()
+    assert.deepStrictEqual(t.calls.map((c) => c.connector + '.' + c.method), ['system.flags'], 'only the switch is read')
+    t.opened(book())
+    await playing(t)
+    t.native.positionSec = 15
+    t.tickAt(T0 + 15000)
+    paused(t, 15, T0 + 15000)
+    await t.idle()
+    assert.strictEqual(t.schedules().length, 0, 'no tick is scheduled')
+    assert.strictEqual(t.calls.filter((c) => c.connector === 'player').length, 0, 'native player is not asked')
+    assert.deepStrictEqual([t.sent.session, t.sent.local, t.sent.close, t.events], [[], [], [], []], 'nothing is sent or written')
+    assert.deepStrictEqual(t.store, {}, 'nothing is stored')
+    assert.deepStrictEqual(t.alerts, [])
+  },
+
+  async 'a switch that cannot be read is off'() {
+    const t = setup({ coreSaver: 'error' })
+    await t.idle()
+    t.opened(book())
+    await playing(t)
+    await t.idle()
+    assert.strictEqual(t.schedules().length, 0)
+    assert.strictEqual(t.saver.snapshot().sessionId, null, 'no session is taken while the switch is unknown')
+    assert.ok(t.logs.some((m) => m.includes('switch could not be read')))
+  },
+
+  async 'switch on: start reads the network, and after a core restart the open session comes back from the core record and the window restarts while playing'() {
+    const store = { openSession: { ps1: { session: book({ currentTime: 40, timeListening: 30 }), unsentSec: 7 } } }
+    const t = setup({ store, native: { positionSec: 50, playing: true }, net: UNMETERED })
+    await t.idle()
+    assert.deepStrictEqual(t.calls.slice(0, 2).map((c) => c.connector + '.' + c.method), ['system.flags', 'system.network'])
+    assert.deepStrictEqual(t.saver.snapshot(), { sessionId: 'ps1', running: true, unsentSec: 7, failedSyncs: 0 })
+    assert.strictEqual(t.schedules().at(-1).atMs, T0 + TICK_MS, 'the 15 s tick is asked again')
+  },
+
+  async 'switch on: with no core record, the session JSON native sends is restored (paused: no window)'() {
+    const t = setup({ native: { playing: false, session: book({ currentTime: 30 }) } })
+    await t.idle()
+    assert.deepStrictEqual(t.saver.snapshot(), { sessionId: 'ps1', running: false, unsentSec: 0, failedSyncs: 0 })
+    assert.strictEqual(t.schedules().length, 0)
+  },
+
+  async 'switch on: with no live session native answers, nothing is taken'() {
+    const t = setup({ native: { live: false, sessionId: null, playing: false } })
+    await t.idle()
+    assert.strictEqual(t.saver.snapshot().sessionId, null)
   }
 }
 

@@ -1,5 +1,16 @@
 /** Diagnostics served to native and the debug receiver (Phase 0 measurements, kept for later checks on the Pixel). */
 export function diagnosticsModule(bridge, { log = console.log, now = () => Date.now(), tick } = {}) {
+  /** playerProbe: asks native player.getPosition, player.getState, system.flags and system.network (Phase 4b-3 checks) */
+  bridge.serve('core', 'playerProbe', async () => {
+    const ask = (c, m) => bridge.call(c, m, {}).catch((e) => ({ error: e.message }))
+    return {
+      position: await ask('player', 'getPosition'),
+      state: await ask('player', 'getState'),
+      flags: await ask('system', 'flags'),
+      network: await ask('system', 'network')
+    }
+  })
+
   /**
    * tickTest({everyMs, ticks}): two quick start/stop cycles of a timer that would fire every second (none may fire), then a
    * timer of everyMs that stops after `ticks` ticks, then a wait for stray ticks. Logs lines starting with TICK.

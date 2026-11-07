@@ -32,6 +32,7 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
       // If playing set seeking flag
       Log.d(tag, "onPositionDiscontinuity: oldPosition=${oldPosition.positionMs}/${oldPosition.mediaItemIndex}, newPosition=${newPosition.positionMs}/${newPosition.mediaItemIndex}, isPlaying=${playerNotificationService.currentPlayer.isPlaying} reason=SEEK")
       playerNotificationService.mediaProgressSyncer.seek()
+      com.audiobookshelf.app.core.PlayerConnector.emitState("seeked", playerNotificationService)
       lastPauseTime = 0 // When seeking while paused reset the auto-rewind
     } else {
       Log.d(tag, "onPositionDiscontinuity: oldPosition=${oldPosition.positionMs}/${oldPosition.mediaItemIndex}, newPosition=${newPosition.positionMs}/${newPosition.mediaItemIndex}, isPlaying=${playerNotificationService.currentPlayer.isPlaying}, reason=$reason")
@@ -55,6 +56,7 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
     }
 
     lazyIsPlaying = isPlaying
+    com.audiobookshelf.app.core.PlayerConnector.emitState(if (isPlaying) "playing" else "paused", playerNotificationService)
 
     // Update widget
     DeviceManager.widgetUpdater?.onPlayerChanged(playerNotificationService)
@@ -142,6 +144,7 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
       }
       if (playerNotificationService.currentPlayer.playbackState == Player.STATE_ENDED) {
         Log.d(tag, "STATE_ENDED")
+        com.audiobookshelf.app.core.PlayerConnector.emitState("ended", playerNotificationService)
         playerNotificationService.sendClientMetadata(PlayerState.ENDED)
 
         playerNotificationService.handlePlaybackEnded()
