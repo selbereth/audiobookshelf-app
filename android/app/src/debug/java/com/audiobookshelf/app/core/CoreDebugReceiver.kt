@@ -33,6 +33,11 @@ class CoreDebugReceiver : BroadcastReceiver() {
         CoreSwitch.writeUi(app, intent.getBooleanExtra("on", false))
         Log.i("CoreDebug", "coreUi written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
       }
+      // Phase 7 switch: the Pebble watch logic runs in the core. Applies at the next start of the app, like the others
+      "corePebble" -> {
+        CoreSwitch.writePebble(app, intent.getBooleanExtra("on", false))
+        Log.i("CoreDebug", "corePebble written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
+      }
       // Sleep timer calls to the core: --es method set|increase|decrease|cancel|resend, --el ms, --ez chapter
       "sleep" -> {
         val args = JSONObject().put("ms", intent.getLongExtra("ms", 0L)).put("isChapterTime", intent.getBooleanExtra("chapter", false)).put("sessionId", "debug")

@@ -43,6 +43,9 @@ object CoreHost {
 
   val isReady get() = ready
 
+  /** The application context the core was started with (null before the first start) */
+  fun appContext(): Context? = app
+
   fun register(name: String, connector: Connector) {
     connectors[name] = connector
   }
@@ -68,6 +71,7 @@ object CoreHost {
     register("timer", TimerConnector())
     register("system", SystemConnector(context))
     register("player", PlayerConnector)
+    register("pebble", PebbleConnector(context))
     SystemConnector.watchNetwork(context)
     register("ui", UiConnector())
     register("store", StoreConnector())

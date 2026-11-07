@@ -13,6 +13,7 @@ import { serverModule } from './modules/server'
 import { tickModule } from './modules/tick'
 import { saverModule } from './modules/saver'
 import { sleepModule } from './modules/sleep'
+import { pebbleModule } from './modules/pebble'
 
 export function createCore(transport, { log = console.log, now = () => Date.now() } = {}) {
   const bridge = createBridge(transport)
@@ -48,6 +49,8 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
   sleep.start()
   // The UI mirror of the device data (Phase 6): reads the switch system.flags {coreUi}, default off
   db.start()
+  // The Pebble watch logic (Phase 7): runs only when native calls `pebble` / `run` (switch corePebble on)
+  const pebble = pebbleModule(bridge, { api, server, db, log })
 
   // The UI says hello when it opens; the core answers and also sends an event, so both directions can be seen
   bridge.serve('core', 'hello', () => {
@@ -55,5 +58,5 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
     return { ok: true }
   })
 
-  return { bridge, emitToUi, db, api, sync, progress, server, tick, saver, sleep }
+  return { bridge, emitToUi, db, api, sync, progress, server, tick, saver, sleep, pebble }
 }
