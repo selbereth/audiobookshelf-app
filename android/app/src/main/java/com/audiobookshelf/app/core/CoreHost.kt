@@ -49,6 +49,8 @@ object CoreHost {
 
   /** Starts the page (once, safe to call again). The page is loaded as http://localhost/core/index.html, the UI's origin. */
   fun start(context: Context) {
+    // The saver switch is read once per process, before any playback can start (Kotlin and the core must agree)
+    CoreSwitch.load(context)
     main.post {
       if (webView != null) return@post
       app = context.applicationContext
@@ -65,6 +67,8 @@ object CoreHost {
     register("wake", WakeConnector(context))
     register("timer", TimerConnector())
     register("system", SystemConnector(context))
+    register("player", PlayerConnector)
+    SystemConnector.watchNetwork(context)
     register("ui", UiConnector())
     register("store", StoreConnector())
     register("secure", SecureConnector(context))

@@ -224,6 +224,7 @@ class MediaProgressSyncer(
   }
 
   fun sync(shouldSyncServer: Boolean, currentTime: Double, cb: (SyncResult?) -> Unit) {
+    if (com.audiobookshelf.app.core.CoreSwitch.coreSaver) return cb(null) // the core's saver saves and sends while the switch is on
     if (lastSyncTime <= 0) {
       Log.e(tag, "Last sync time is not set $lastSyncTime")
       return cb(null)

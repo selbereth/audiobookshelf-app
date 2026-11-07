@@ -87,6 +87,7 @@ object MediaEventManager {
           playbackSession: PlaybackSession,
           syncResult: SyncResult?
   ) {
+    if (com.audiobookshelf.app.core.CoreSwitch.coreSaver) return // the core's saver writes these history events while the switch is on
     val mediaItemHistory =
             getMediaItemHistoryMediaItem(playbackSession.mediaItemId)
                     ?: createMediaItemHistoryForSession(playbackSession)

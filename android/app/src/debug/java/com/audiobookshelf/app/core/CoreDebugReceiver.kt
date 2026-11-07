@@ -18,6 +18,11 @@ class CoreDebugReceiver : BroadcastReceiver() {
     val app = context.applicationContext
     when (intent.getStringExtra("action")) {
       "start" -> CoreHost.start(app)
+      // Phase 4b-3 switch: which path saves progress. Applies at the next start of the app (force-stop, then start it)
+      "coreSaver" -> {
+        CoreSwitch.write(app, intent.getBooleanExtra("on", false))
+        Log.i("CoreDebug", "coreSaver written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
+      }
       "paperCheck" -> Thread { PaperRoundTripCheck.run(app) }.start()
       "threads" -> Thread.getAllStackTraces().forEach { (t, st) ->
         if (t.name.startsWith("Thread-") || t.name == "main") Log.i("ThreadDump", "${t.name} ${t.state}\n" + st.take(14).joinToString("\n") { "    at $it" })

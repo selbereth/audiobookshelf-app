@@ -198,6 +198,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     }
 
     Log.d(tag, "onDestroy")
+    com.audiobookshelf.app.core.PlayerConnector.service = null
     isStarted = false
     isClosed = true
     DeviceManager.widgetUpdater?.onPlayerChanged(this)
@@ -232,6 +233,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
     // The JS core (hidden web view) lives as long as the process
     com.audiobookshelf.app.core.CoreHost.start(ctx)
+    com.audiobookshelf.app.core.PlayerConnector.service = this
     DeviceManager.onSettingsChanged = { Handler(Looper.getMainLooper()).post { setMediaSessionConnectorPlaybackActions() } }
 
     // Initialize widget
@@ -476,6 +478,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     }
 
     currentPlaybackSession = playbackSession
+    com.audiobookshelf.app.core.PlayerConnector.emitSessionOpened(playbackSession)
     DeviceManager.setLastPlaybackSession(
             playbackSession
     ) // Save playback session to use when app is closed
@@ -1033,6 +1036,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   fun setPlaybackSpeed(speed: Float) {
     mediaManager.setSavedPlaybackRate(speed)
     currentPlayer.setPlaybackSpeed(speed)
+    com.audiobookshelf.app.core.PlayerConnector.emitState("rate", this)
     clientEventEmitter?.onPlaybackSpeedChanged(speed)
 
     // Refresh Android Auto actions
@@ -1041,6 +1045,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
   fun closePlayback(calledOnError: Boolean? = false) {
     Log.d(tag, "closePlayback")
+    com.audiobookshelf.app.core.PlayerConnector.emitState("closed", this, calledOnError == true)
     val config = DeviceManager.serverConnectionConfig
 
     val isLocal = mediaProgressSyncer.currentIsLocal
@@ -1052,16 +1057,16 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               calledOnError == false
       ) { // If closing on error then do not sync progress (causes exception)
         Log.d(tag, "Media Progress syncer stopped")
-        // If not local session then close on server
-        if (!isLocal && currentSessionId != "") {
+        // If not local session then close on server (the core closes it while its switch is on)
+        if (!isLocal && currentSessionId != "" && !com.audiobookshelf.app.core.CoreSwitch.coreSaver) {
           apiHandler.closePlaybackSession(currentSessionId, config) {
             Log.d(tag, "Closed playback session $currentSessionId")
           }
         }
       }
     } else {
-      // If not local session then close on server
-      if (!isLocal && currentSessionId != "") {
+      // If not local session then close on server (the core closes it while its switch is on)
+      if (!isLocal && currentSessionId != "" && !com.audiobookshelf.app.core.CoreSwitch.coreSaver) {
         apiHandler.closePlaybackSession(currentSessionId, config) {
           Log.d(tag, "Closed playback session $currentSessionId")
         }

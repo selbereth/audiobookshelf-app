@@ -30,7 +30,8 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
   const sync = syncModule(bridge, { log, db, api })
   const progress = progressModule(bridge, { api, db })
   const server = serverModule(bridge, { api })
-  // Progress saving decisions (Phase 4b-2): registered, not wired to playback yet (Kotlin's MediaProgressSyncer still saves)
+  // Progress saving decisions (Phase 4b-2/4b-3). start() reads the switch (system.flags coreSaver, default off): while it is off
+  // nothing here saves or sends, and Kotlin's MediaProgressSyncer does
   const saver = saverModule(bridge, {
     progress,
     db,
@@ -40,6 +41,7 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
     alert: (kind) => emitToUi('progressSync', { kind }),
     emit: (event, data) => emitToUi(event, data)
   })
+  saver.start()
 
   // The UI says hello when it opens; the core answers and also sends an event, so both directions can be seen
   bridge.serve('core', 'hello', () => {
