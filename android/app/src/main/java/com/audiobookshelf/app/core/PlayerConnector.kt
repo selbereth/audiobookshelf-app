@@ -25,7 +25,10 @@ object PlayerConnector : Connector {
   @Volatile
   var service: PlayerNotificationService? = null
 
+  private val commands = setOf("pause", "play", "setVolume", "seekBackward")
+
   override fun call(method: String, args: JSONObject, reply: (Boolean, String) -> Unit) {
+    if (method in commands) return command(method, args, reply)
     if (method != "getPosition" && method != "getState") return reply(false, "unknown player.$method")
     main.post {
       val json = try {
@@ -35,6 +38,29 @@ object PlayerConnector : Connector {
         noSession()
       }
       reply(true, json.toString())
+    }
+  }
+
+  /**
+   * Commands the core decides on (the sleep timer): pause, play, volume, seek back by ms. Run on the main thread, answered when
+   * done. With no running service the answer is {live: false} and nothing happens.
+   */
+  private fun command(method: String, args: JSONObject, reply: (Boolean, String) -> Unit) {
+    main.post {
+      val s = service
+      try {
+        when (method) {
+          "pause" -> s?.currentPlayer?.pause()
+          "play" -> s?.currentPlayer?.play()
+          "setVolume" -> s?.currentPlayer?.volume = args.getDouble("volume").toFloat()
+          "seekBackward" -> s?.seekBackward(args.getLong("ms"))
+        }
+        Log.i(TAG, "player.$method (core) live=${s != null}")
+        reply(true, JSONObject().put("live", s != null).toString())
+      } catch (e: Exception) {
+        Log.w(TAG, "player.$method failed: ${e.message}")
+        reply(false, e.message ?: "failed")
+      }
     }
   }
 

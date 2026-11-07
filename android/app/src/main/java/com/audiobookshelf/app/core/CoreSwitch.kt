@@ -11,13 +11,25 @@ import android.content.Context
 object CoreSwitch {
   private const val PREFS = "core"
   private const val KEY = "coreSaver"
+  private const val SLEEP_KEY = "coreSleep"
 
   @Volatile
   var coreSaver = false
     private set
 
+  /** Phase 5: the core's sleep timer. Same rules as coreSaver: read at start, default off, Kotlin's SleepTimerManager is silent while on. */
+  @Volatile
+  var coreSleep = false
+    private set
+
   fun load(context: Context) {
-    coreSaver = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY, false)
+    val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    coreSaver = prefs.getBoolean(KEY, false)
+    coreSleep = prefs.getBoolean(SLEEP_KEY, false)
+  }
+
+  fun writeSleep(context: Context, on: Boolean) {
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(SLEEP_KEY, on).commit()
   }
 
   fun write(context: Context, on: Boolean) {

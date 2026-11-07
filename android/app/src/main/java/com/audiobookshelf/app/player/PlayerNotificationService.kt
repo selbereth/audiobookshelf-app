@@ -2094,6 +2094,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
             }
   }
 
+  // Phase 5: the core's sleep timer owns the 2 minute window and asks for the unregister when it is due
+  fun unregisterSensorNow() {
+    if (!isShakeSensorRegistered) return
+    mSensorManager!!.unregisterListener(mShakeDetector)
+    isShakeSensorRegistered = false
+  }
+
   private val networkCallback =
           object : ConnectivityManager.NetworkCallback() {
             // Network capabilities have changed for the network

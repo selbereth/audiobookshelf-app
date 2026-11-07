@@ -2,6 +2,7 @@ package com.audiobookshelf.app.core
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import org.json.JSONObject
 
 /**
@@ -23,6 +24,7 @@ class TimerConnector : Connector {
         val id = args.getString("id")
         val atMs = args.getLong("atMs")
         main.post {
+          Log.d("TimerConnector", "schedule $id atMs=$atMs")
           cancelPending(id)
           val tick = Runnable {
             pending.remove(id)
@@ -36,6 +38,7 @@ class TimerConnector : Connector {
       "cancel" -> {
         val id = args.getString("id")
         main.post {
+          Log.d("TimerConnector", "cancel $id")
           cancelPending(id)
           reply(true, "")
         }

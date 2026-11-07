@@ -4,6 +4,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.audiobookshelf.app.MainActivity
+import com.audiobookshelf.app.core.CoreSleep
+import com.audiobookshelf.app.core.CoreSwitch
 import com.audiobookshelf.app.data.*
 import com.audiobookshelf.app.device.DeviceManager
 import com.audiobookshelf.app.media.MediaEventManager
@@ -381,6 +383,11 @@ class AbsAudioPlayer : Plugin() {
 
     Handler(Looper.getMainLooper()).post {
         val playbackSession: PlaybackSession? = playerNotificationService.mediaProgressSyncer.currentPlaybackSession ?: playerNotificationService.currentPlaybackSession
+        if (CoreSwitch.coreSleep) { // Phase 5: the core's sleep timer answers
+          val args = JSONObject().put("ms", time).put("isChapterTime", isChapterTime).put("sessionId", playbackSession?.id ?: "")
+          CoreSleep.call("set", args) { ok, json -> call.resolve(JSObject().put("success", CoreSleep.succeeded(ok, json))) }
+          return@post
+        }
         val success:Boolean = playerNotificationService.sleepTimerManager.setManualSleepTimer(playbackSession?.id ?: "", time, isChapterTime)
         val ret = JSObject()
         ret.put("success", success)
@@ -401,7 +408,7 @@ class AbsAudioPlayer : Plugin() {
     val time:Long = call.getString("time", "300000")!!.toLong()
 
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.sleepTimerManager.increaseSleepTime(time)
+      if (CoreSwitch.coreSleep) CoreSleep.call("increase", JSONObject().put("ms", time)) else playerNotificationService.sleepTimerManager.increaseSleepTime(time)
       val ret = JSObject()
       ret.put("success", true)
       call.resolve()
@@ -413,7 +420,7 @@ class AbsAudioPlayer : Plugin() {
     val time:Long = call.getString("time", "300000")!!.toLong()
 
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.sleepTimerManager.decreaseSleepTime(time)
+      if (CoreSwitch.coreSleep) CoreSleep.call("decrease", JSONObject().put("ms", time)) else playerNotificationService.sleepTimerManager.decreaseSleepTime(time)
       val ret = JSObject()
       ret.put("success", true)
       call.resolve()
@@ -423,7 +430,7 @@ class AbsAudioPlayer : Plugin() {
   @PluginMethod
   fun cancelSleepTimer(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
-      playerNotificationService.sleepTimerManager.cancelSleepTimer()
+      if (CoreSwitch.coreSleep) CoreSleep.call("cancel") else playerNotificationService.sleepTimerManager.cancelSleepTimer()
     }
     call.resolve()
   }

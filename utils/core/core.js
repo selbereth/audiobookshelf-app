@@ -12,6 +12,7 @@ import { progressModule } from './modules/progress'
 import { serverModule } from './modules/server'
 import { tickModule } from './modules/tick'
 import { saverModule } from './modules/saver'
+import { sleepModule } from './modules/sleep'
 
 export function createCore(transport, { log = console.log, now = () => Date.now() } = {}) {
   const bridge = createBridge(transport)
@@ -42,6 +43,9 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
     emit: (event, data) => emitToUi(event, data)
   })
   saver.start()
+  // Sleep timer (Phase 5): start() reads the switch system.flags {coreSleep}, default off. While it is off Kotlin's SleepTimerManager runs
+  const sleep = sleepModule(bridge, { tick, db, now, log, emitToUi: (event, data) => emitToUi(event, data) })
+  sleep.start()
 
   // The UI says hello when it opens; the core answers and also sends an event, so both directions can be seen
   bridge.serve('core', 'hello', () => {
@@ -49,5 +53,5 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
     return { ok: true }
   })
 
-  return { bridge, emitToUi, db, api, sync, progress, server, tick, saver }
+  return { bridge, emitToUi, db, api, sync, progress, server, tick, saver, sleep }
 }
