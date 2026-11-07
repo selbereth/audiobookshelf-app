@@ -36,10 +36,28 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
 
   const deviceSync = (args = {}) => bridge.call('device', 'sync', args).catch((e) => log('db: device.sync failed ' + e.message))
 
+  // Phase 6: the UI mirror. start() reads the switch system.flags {coreUi} (default off). While it is off nothing is sent and the UI
+  // keeps its own copy of the device data, as before. While it is on, every saved device data goes to the visible UI as `deviceChanged`
+  // (so a change the core makes on its own, such as a sign-out after a refused refresh, reaches the UI's copy too)
+  let mirror = false
+  async function start() {
+    try {
+      const flags = await bridge.call('system', 'flags', {})
+      mirror = !!(flags && flags.coreUi === true)
+    } catch (e) {
+      mirror = false
+      log('db: switch not read, UI mirror off: ' + e.message)
+    }
+    return mirror
+  }
+
   async function readDevice() {
     return rules.normalizeDeviceData(await store.get(C.device, 'data')).data
   }
-  const saveDevice = (data) => store.put(C.device, 'data', data)
+  const saveDevice = async (data) => {
+    await store.put(C.device, 'data', data)
+    if (mirror) emitToUi('deviceChanged', { deviceData: data })
+  }
 
   const nonEmpty = (v) => (v === undefined || v === null || v === '' ? null : v)
   const methods = {}
@@ -58,6 +76,9 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
     await deviceSync({ settingsChanged: true })
     return data
   }, { write: true })
+
+  /** The UI asks whether its mirror of the device data is on (Phase 6 switch coreUi) */
+  define('mirrorSwitch', () => ({ coreUi: mirror }))
 
   // ---- server connections
   define('setCurrentServerConnectionConfig', async (payload) => {
@@ -363,5 +384,5 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
     return result
   }, { write: true })
 
-  return { methods, store, serial, addSyncEvent, addPlaybackEvent, now, startup: () => serial(() => methods.startup({})) }
+  return { methods, store, serial, start, addSyncEvent, addPlaybackEvent, now, startup: () => serial(() => methods.startup({})) }
 }

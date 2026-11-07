@@ -28,6 +28,11 @@ class CoreDebugReceiver : BroadcastReceiver() {
         CoreSwitch.writeSleep(app, intent.getBooleanExtra("on", false))
         Log.i("CoreDebug", "coreSleep written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
       }
+      // Phase 6 switch: the UI mirrors the device data from the core. Applies at the next start of the app, like the others
+      "coreUi" -> {
+        CoreSwitch.writeUi(app, intent.getBooleanExtra("on", false))
+        Log.i("CoreDebug", "coreUi written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
+      }
       // Sleep timer calls to the core: --es method set|increase|decrease|cancel|resend, --el ms, --ez chapter
       "sleep" -> {
         val args = JSONObject().put("ms", intent.getLongExtra("ms", 0L)).put("isChapterTime", intent.getBooleanExtra("chapter", false)).put("sessionId", "debug")
