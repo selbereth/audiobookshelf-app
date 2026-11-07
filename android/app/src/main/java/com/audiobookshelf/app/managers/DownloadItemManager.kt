@@ -5,6 +5,8 @@ import android.net.Uri
 import android.os.StatFs
 import androidx.documentfile.provider.DocumentFile
 import com.anggrayudi.storage.file.fullName
+import com.audiobookshelf.app.core.CoreSwitch
+import com.audiobookshelf.app.core.DownloadCore
 import com.audiobookshelf.app.device.DeviceManager
 import com.audiobookshelf.app.device.FolderScanner
 import com.audiobookshelf.app.models.DownloadItem
@@ -339,8 +341,16 @@ class DownloadItemManager(
 
   private fun handlePartUpdate(part: DownloadItemPart) {
     clientEventEmitter.onDownloadItemPartUpdate(part)
+    val found = synchronized(this) { downloadItemQueue.find { it.id == part.downloadItemId } }
+    // Phase 8 (slice 1): with coreDownload on, the core decides the step and this applies it. No answer: the rules below run
+    if (CoreSwitch.coreDownload) {
+      DownloadCore.partStep(part, hasItem = found != null)?.let { action ->
+        applyPartStep(found, part, action)
+        return
+      }
+    }
     val item =
-            synchronized(this) { downloadItemQueue.find { it.id == part.downloadItemId } }
+            found
                     ?: run {
                       removeActivePart(part)
                       return
@@ -361,12 +371,33 @@ class DownloadItemManager(
     if (part.isInternalStorage) finalizeInternalFile(item, part) else moveDownloadedFile(item, part)
   }
 
+  /** Phase 8: applies the core's step (same actions as the rules above, in the same order) */
+  private fun applyPartStep(item: DownloadItem?, part: DownloadItemPart, action: String) {
+    if (item == null) {
+      removeActivePart(part)
+      return
+    }
+    when (action) {
+      "stalled" -> {
+        AbsLogger.error(tag, "Download stalled: ${part.filename}")
+        activeCalls.remove(part.id)?.cancel()
+        failOrRetry(item, part, "Download stalled")
+      }
+      "failed" -> failOrRetry(item, part, "Transfer failed")
+      "finalizeInternal" -> finalizeInternalFile(item, part)
+      "moveSaf" -> moveDownloadedFile(item, part)
+      // "wait": still transferring, nothing to do this second
+    }
+  }
+
   @Synchronized
   private fun failOrRetry(item: DownloadItem, part: DownloadItemPart, reason: String) {
     removeActivePart(part)
-    part.retryCount += 1
+    // Phase 8: with coreDownload on, the core counts the retry and says whether it is terminal
+    val core = if (CoreSwitch.coreDownload) DownloadCore.retry("transfer", part.retryCount) else null
+    part.retryCount = core?.count ?: (part.retryCount + 1)
     reservations.remove(part.destinationPath)
-    if (part.retryCount > MAX_RETRIES) {
+    if (core?.terminal ?: (part.retryCount > MAX_RETRIES)) {
       markTerminalFailure(item, part, "$reason after $MAX_RETRIES retries")
       return
     }
@@ -387,9 +418,11 @@ class DownloadItemManager(
     part.isMoving = false
     part.failed = false
     part.completed = false
-    part.authRetryCount += 1
+    // Phase 8: with coreDownload on, the core counts the 401 and says whether it is terminal
+    val core = if (CoreSwitch.coreDownload) DownloadCore.retry("auth", part.authRetryCount) else null
+    part.authRetryCount = core?.count ?: (part.authRetryCount + 1)
     part.lastUpdateTime = System.currentTimeMillis()
-    if (part.authRetryCount > MAX_AUTH_RETRIES) {
+    if (core?.terminal ?: (part.authRetryCount > MAX_AUTH_RETRIES)) {
       markTerminalFailure(item, part, "Unauthorized after $MAX_AUTH_RETRIES token refresh attempts")
       return
     }
@@ -616,6 +649,8 @@ class DownloadItemManager(
   private fun hasAvailableSpace(part: DownloadItemPart): Boolean {
     val staging = File(part.destinationPath)
     val fs = statFsFor(staging)
+    // Phase 8: with coreDownload on, the core applies the headroom rule to the numbers native reads
+    if (CoreSwitch.coreDownload) DownloadCore.hasSpace(fs.availableBytes, fs.totalBytes)?.let { return it }
     return fs.availableBytes >= max(MIN_FREE_SPACE_BYTES, fs.totalBytes / 20L)
   }
 
