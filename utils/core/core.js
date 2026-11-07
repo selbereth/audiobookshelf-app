@@ -14,6 +14,7 @@ import { tickModule } from './modules/tick'
 import { saverModule } from './modules/saver'
 import { sleepModule } from './modules/sleep'
 import { pebbleModule } from './modules/pebble'
+import { downloadsModule } from './modules/downloads'
 
 export function createCore(transport, { log = console.log, now = () => Date.now() } = {}) {
   const bridge = createBridge(transport)
@@ -51,6 +52,8 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
   db.start()
   // The Pebble watch logic (Phase 7): runs only when native calls `pebble` / `run` (switch corePebble on)
   const pebble = pebbleModule(bridge, { api, server, db, log })
+  // Download decisions (Phase 8, slice 1): pure calls, answered on demand while the switch coreDownload is on in native
+  downloadsModule(bridge)
 
   // The UI says hello when it opens; the core answers and also sends an event, so both directions can be seen
   bridge.serve('core', 'hello', () => {

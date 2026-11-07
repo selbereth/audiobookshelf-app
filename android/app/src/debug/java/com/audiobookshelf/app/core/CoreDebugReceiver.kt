@@ -38,6 +38,21 @@ class CoreDebugReceiver : BroadcastReceiver() {
         CoreSwitch.writePebble(app, intent.getBooleanExtra("on", false))
         Log.i("CoreDebug", "corePebble written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
       }
+      // Phase 8 switch: the core decides download steps, retry counts and free space. Applies at the next start of the app
+      "coreDownload" -> {
+        CoreSwitch.writeDownload(app, intent.getBooleanExtra("on", false))
+        Log.i("CoreDebug", "coreDownload written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
+      }
+      // Phase 8 calls to the downloads connector: --es method partStep|retryOutcome|hasSpace, --es args '<json>'
+      "downloads" -> {
+        val method = intent.getStringExtra("method") ?: ""
+        try {
+          CoreHost.callUp("downloads", method, JSONObject(intent.getStringExtra("args") ?: "{}"), 5000) { ok, json -> Log.i("CoreDebug", "downloads.$method ok=$ok $json") }
+        } catch (e: Exception) {
+          Log.e("CoreDebug", "downloads.$method rejected, bad args: ${e.message}")
+          return
+        }
+      }
       // Sleep timer calls to the core: --es method set|increase|decrease|cancel|resend, --el ms, --ez chapter
       "sleep" -> {
         val args = JSONObject().put("ms", intent.getLongExtra("ms", 0L)).put("isChapterTime", intent.getBooleanExtra("chapter", false)).put("sessionId", "debug")
