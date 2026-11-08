@@ -106,6 +106,18 @@ class CoreDebugReceiver : BroadcastReceiver() {
         val args = JSONObject().put("ms", intent.getIntExtra("ms", 0).toLong())
         com.audiobookshelf.app.core.PlayerConnector.call(m, args) { ok, json -> Log.i("CoreDebug", "player.$m ok=$ok $json") }
       }
+      // Phase 9 item 5 check: a cache miss first, then the native inputs go to the core, then the MediaItems the cache builds
+      "browseCheck" -> {
+        val miss = com.audiobookshelf.app.core.PlayerConnector.browseChildren("/", app)
+        Log.i("CoreDebug", "browse / before the core tree: ${miss?.map { it.description.title } ?: "null (miss)"}")
+        val libs = com.audiobookshelf.app.core.PlayerConnector.service?.mediaManager?.serverLibraries ?: emptyList()
+        com.audiobookshelf.app.core.PlayerConnector.emitBrowseInputs(intent.getIntExtra("inProgress", 0), libs, intent.getBooleanExtra("recents", false))
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+          Log.i("CoreDebug", "browse / from the core tree: ${com.audiobookshelf.app.core.PlayerConnector.browseChildren("/", app)?.map { "${it.description.title}#${it.mediaId}" } }")
+          Log.i("CoreDebug", "browse __LIBRARIES__: ${com.audiobookshelf.app.core.PlayerConnector.browseChildren("__LIBRARIES__", app)?.map { it.description.title } ?: "null (miss)"}")
+          Log.i("CoreDebug", "browse lib-x (not in the tree): ${com.audiobookshelf.app.core.PlayerConnector.browseChildren("lib-x", app) ?: "null (miss)"}")
+        }, 1500)
+      }
       // Reads the switches as the core sees them (the native answer to system.flags)
       "flags" -> com.audiobookshelf.app.core.SystemConnector(app).call("flags", JSONObject()) { ok, json -> Log.i("CoreDebug", "flags ok=$ok $json") }
       "ping" -> {

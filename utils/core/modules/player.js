@@ -145,6 +145,9 @@ export function playerModule(bridge, { db, tick, server = null, now = () => Date
   const skip = chapterSkipModule(native, totalDurationMs)
   const skipChapter = async (d) => skip(d, await native('player', 'getState'))
 
+  // ---- slice 5 (item 5): the browse tree. native sends player/browseInputs; the core answers with player.setBrowseTree
+  bridge.on('player', 'browseInputs', (d) => later(() => native('player', 'setBrowseTree', { tree: browseTree(d) })))
+
   // ---- slice 4 (item 4): the playback error fallback through the core's server.playItem (needs server)
   const playbackError = server ? playbackErrorModule(native, server) : null
   const onPlaybackError = (d) => (playbackError ? playbackError(d) : null)
@@ -353,4 +356,33 @@ export function playbackErrorModule(native, server) {
     if (!r || r.error || !r.id) return native('player', 'closeOnError', { errorMessage: d.errorMessage }) // :639-641
     return native('player', 'loadSession', { session: r, playbackRate: d.playbackRate }) // :643 preparePlayer(it, true, null)
   }
+}
+
+// ---- slice 5 (item 5): the Android Auto browse tree. Quotes: BrowseTree.kt (init) and DataClasses.kt (Library.getMediaMetadata),
+// master 96f28d39. The core decides which items there are and their order; native builds the MediaItems from this (its cache).
+
+export const BROWSE = { CONTINUE: '__CONTINUE__', DOWNLOADS: '__DOWNLOADS__', LIBRARIES: '__LIBRARIES__', RECENTLY: '__RECENTLY__' } // BrowseTree.kt const vals
+
+/**
+ * BrowseTree.kt:44-75 init. Inputs: how many items are in progress, the libraries (id, name, icon, stats.numAudioFiles or null),
+ * and whether the recents were loaded. Output: the root items in order, and the children of Libraries and Recent.
+ * Quirks kept: the Libraries item shows when there is any library, even if all of them have no audio (the children are then empty);
+ * a library with no stats is kept (only numAudioFiles == 0 is skipped).
+ */
+export function browseTree({ inProgressCount, libraries, recentsLoaded }) {
+  const root = []
+  const children = { [BROWSE.LIBRARIES]: [], [BROWSE.RECENTLY]: [] }
+  const libs = libraries || []
+  if (inProgressCount > 0) root.push({ id: BROWSE.CONTINUE, title: 'Continue', icon: 'continue' }) // :45-46
+  if (libs.length > 0) { // :49
+    if (recentsLoaded) root.push({ id: BROWSE.RECENTLY, title: 'Recent', icon: 'recent' }) // :50-51
+    root.push({ id: BROWSE.LIBRARIES, title: 'Libraries', icon: 'libraries' }) // :53
+    for (const lib of libs) {
+      if (lib.stats && lib.stats.numAudioFiles === 0) continue // :57 `library.stats?.numAudioFiles == 0`
+      children[BROWSE.LIBRARIES].push({ id: lib.id, title: lib.name, icon: lib.icon, browsable: true }) // :60-62 (library.getMediaMetadata)
+      if (recentsLoaded) children[BROWSE.RECENTLY].push({ id: BROWSE.RECENTLY + lib.id, title: lib.name, icon: lib.icon, browsable: true }) // :65-69, DataClasses.kt:375-376
+    }
+  }
+  root.push({ id: BROWSE.DOWNLOADS, title: 'Downloads', icon: 'downloads' }) // :75
+  return { root, children }
 }

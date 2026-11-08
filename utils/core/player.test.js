@@ -1,7 +1,7 @@
 import assert from 'assert'
 import { execSync } from 'child_process'
 import { tickModule } from './modules/tick'
-import { pauseSeekBackMs, pauseSeekAmountMs, playerModule, nextSpeed, mediaKeyPlan, clickWindowPlan, KEY, ACTION_DOWN, ACTION_UP, nextChapterTarget, chapterBackTarget, trackAt, seekPlan, restartPosition, playbackErrorPlan, playFromIdPlan } from './modules/player'
+import { pauseSeekBackMs, pauseSeekAmountMs, playerModule, nextSpeed, mediaKeyPlan, clickWindowPlan, KEY, ACTION_DOWN, ACTION_UP, nextChapterTarget, chapterBackTarget, trackAt, seekPlan, restartPosition, playbackErrorPlan, playFromIdPlan, browseTree } from './modules/player'
 
 // Every test quotes the Kotlin line it ports. `quote` reads that line from the Kotlin source at master 96f28d39 and checks the
 // needle is on it, so a quoted line that drifts from the source fails the test.
@@ -445,6 +445,60 @@ Object.assign(tests, {
     assert.deepStrictEqual(await run({ id: 'sess2', audioTracks: [] }, 0), ['server.playItem', 'player.loadSession'])
     assert.deepStrictEqual(await run({ error: 'no connection' }, 0), ['server.playItem', 'player.closeOnError'])
     assert.deepStrictEqual(await run({ id: 'sess2' }, 2), ['player.closeOnError'], 'a transcode that failed is not asked again')
+  },
+})
+
+// ---- slice 5 (item 5): the Android Auto browse tree
+const BT = 'android/app/src/main/java/com/audiobookshelf/app/player/BrowseTree.kt'
+const DC = 'android/app/src/main/java/com/audiobookshelf/app/data/DataClasses.kt'
+const qb = (line, needle) => quoteIn(BT, line, needle)
+const LIBS = [{ id: 'lib1', name: 'Books', icon: 'database', stats: { numAudioFiles: 4 } }, { id: 'lib2', name: 'Empty', icon: 'database', stats: { numAudioFiles: 0 } }]
+
+Object.assign(tests, {
+  'browse root: continue, recent, libraries, downloads, in that order (BrowseTree.kt:45-75)'() {
+    qb(45, 'if (itemsInProgress.isNotEmpty()) {')
+    qb(49, 'if (libraries.isNotEmpty()) {')
+    qb(50, 'if (recentsLoaded) {')
+    qb(75, 'rootList += downloadsMetadata')
+    const t = browseTree({ inProgressCount: 2, libraries: LIBS, recentsLoaded: true })
+    assert.deepStrictEqual(t.root.map((x) => x.id), ['__CONTINUE__', '__RECENTLY__', '__LIBRARIES__', '__DOWNLOADS__'])
+  },
+
+  'browse root: no continue without items in progress; no recent until the recents are loaded (:45, :50)'() {
+    const t = browseTree({ inProgressCount: 0, libraries: LIBS, recentsLoaded: false })
+    assert.deepStrictEqual(t.root.map((x) => x.id), ['__LIBRARIES__', '__DOWNLOADS__'])
+  },
+
+  'browse libraries: a library with no audio files is skipped (:57); one with no stats is kept'() {
+    qb(57, 'if (library.stats?.numAudioFiles == 0) return@forEach')
+    const t = browseTree({ inProgressCount: 0, libraries: [...LIBS, { id: 'lib3', name: 'Nostats', icon: 'x', stats: null }], recentsLoaded: false })
+    assert.deepStrictEqual(t.children.__LIBRARIES__.map((x) => x.id), ['lib1', 'lib3'])
+  },
+
+  'browse quirk: the Libraries item shows when there are libraries, even if all have no audio (children empty)'() {
+    const t = browseTree({ inProgressCount: 0, libraries: [{ id: 'lib2', name: 'Empty', icon: 'database', stats: { numAudioFiles: 0 } }], recentsLoaded: false })
+    assert.ok(t.root.some((x) => x.id === '__LIBRARIES__'))
+    assert.deepStrictEqual(t.children.__LIBRARIES__, [])
+  },
+
+  'recent children carry the __RECENTLY__ id prefix (DataClasses.kt:375)'() {
+    quoteIn(DC, 375, 'mediaId = "__RECENTLY__$id"')
+    const t = browseTree({ inProgressCount: 0, libraries: LIBS, recentsLoaded: true })
+    assert.deepStrictEqual(t.children.__RECENTLY__.map((x) => x.id), ['__RECENTLY__lib1'])
+  },
+
+  async 'browse inputs from native: the core answers with player.setBrowseTree'() {
+    const calls = []
+    const handlers = new Map()
+    const bridge = { call: (c, m, a) => { calls.push({ c, m, a }); return Promise.resolve(c === 'system' ? { corePlayer: true } : {}) }, on: (c, e, h) => handlers.set(c + '/' + e, h), serve: () => {} }
+    const mod = playerModule(bridge, { db: { methods: {} }, tick: {}, now: () => 0, log: () => {} })
+    mod.start()
+    handlers.get('player/browseInputs')({ inProgressCount: 1, libraries: LIBS, recentsLoaded: false })
+    await new Promise((r) => setImmediate(r))
+    await new Promise((r) => setImmediate(r))
+    const set = calls.filter((x) => x.m === 'setBrowseTree')
+    assert.strictEqual(set.length, 1)
+    assert.deepStrictEqual(set[0].a.tree.root.map((x) => x.id), ['__CONTINUE__', '__LIBRARIES__', '__DOWNLOADS__'])
   },
 })
 
