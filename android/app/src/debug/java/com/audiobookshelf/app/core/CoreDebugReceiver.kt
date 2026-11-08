@@ -43,6 +43,11 @@ class CoreDebugReceiver : BroadcastReceiver() {
         CoreSwitch.writeDownload(app, intent.getBooleanExtra("on", false))
         Log.i("CoreDebug", "coreDownload written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
       }
+      // Phase 10 (slice C1) switch: the core decides the Cast player switch and the Cast volume. Applies at the next start of the app
+      "coreCast" -> {
+        CoreSwitch.writeCast(app, intent.getBooleanExtra("on", false))
+        Log.i("CoreDebug", "coreCast written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
+      }
       // Phase 10 switch: the core decides the read-aloud's sleep timer. Applies at the next start of the app, like the others
       "coreTts" -> {
         CoreSwitch.writeTts(app, intent.getBooleanExtra("on", false))

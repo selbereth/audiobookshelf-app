@@ -17,6 +17,7 @@ object CoreSwitch {
   private const val DOWNLOAD_KEY = "coreDownload"
   private const val PLAYER_KEY = "corePlayer"
   private const val TTS_KEY = "coreTts"
+  private const val CAST_KEY = "coreCast"
 
   @Volatile
   var coreSaver = false
@@ -52,6 +53,11 @@ object CoreSwitch {
   var coreTts = false
     private set
 
+  /** Phase 10 (slice C1): the core decides the Cast player switch and the Cast device volume (utils/core/modules/cast.js). Off: Kotlin */
+  @Volatile
+  var coreCast = false
+    private set
+
   private var loaded = false
 
   /** Reads the switches the first time only: a later call (CoreHost.start runs often) does not change them mid-process. */
@@ -67,9 +73,12 @@ object CoreSwitch {
     coreDownload = prefs.getBoolean(DOWNLOAD_KEY, false)
     corePlayer = prefs.getBoolean(PLAYER_KEY, false)
     coreTts = prefs.getBoolean(TTS_KEY, false)
+    coreCast = prefs.getBoolean(CAST_KEY, false)
   }
 
   fun writeTts(context: Context, on: Boolean) = put(context, TTS_KEY, on)
+
+  fun writeCast(context: Context, on: Boolean) = put(context, CAST_KEY, on)
 
   fun writeUi(context: Context, on: Boolean) = put(context, UI_KEY, on)
 

@@ -17,6 +17,7 @@ import { pebbleModule } from './modules/pebble'
 import { downloadsModule } from './modules/downloads'
 import { playerModule } from './modules/player'
 import { ttsModule } from './modules/tts'
+import { castModule } from './modules/cast'
 
 export function createCore(transport, { log = console.log, now = () => Date.now() } = {}) {
   const bridge = createBridge(transport)
@@ -62,6 +63,9 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
   // Player control (Phase 9, slice 1): the auto-rewind after a pause. start() reads the switch system.flags {corePlayer}, default off
   const player = playerModule(bridge, { db, tick, server, now, log })
   player.start()
+  // Cast decisions (Phase 10, slice C1): the player switch and the device volume. start() reads the switch coreCast, default off
+  const cast = castModule(bridge, { log })
+  cast.start()
 
   // The UI says hello when it opens; the core answers and also sends an event, so both directions can be seen
   bridge.serve('core', 'hello', () => {
