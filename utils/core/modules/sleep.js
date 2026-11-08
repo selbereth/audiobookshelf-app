@@ -129,7 +129,7 @@ export function remainingSecOf(st, speed, curMs) {
   return Math.round(Math.trunc((st.endMs - curMs) / 1000) / speed) // :93
 }
 
-export function sleepModule(bridge, { tick, db, now = () => Date.now(), log = () => {}, emitToUi = () => {} } = {}) {
+export function sleepModule(bridge, { tick, db, now = () => Date.now(), log = () => {}, emitToUi = () => {}, tts = null } = {}) {
   // Kotlin fields: sleepTimerRunning, sleepTimerEndTime, sleepTimerLength, sleepTimerElapsed, sleepTimerFinishedAt,
   // isAutoSleepTimer, autoTimerDisabled, sleepTimerSessionId (SleepTimerManager.kt:22-30)
   const S = { running: false, endMs: 0, lengthMs: 0, elapsedMs: 0, finishedAt: 0, isAuto: false, autoDisabled: false, sleepSessionId: '' }
@@ -416,6 +416,11 @@ export function sleepModule(bridge, { tick, db, now = () => Date.now(), log = ()
     const r = await run(() => fn(args || {}))
     return r === OFF ? { ok: false, off: true } : r
   }
+  // Phase 10 (slice B): a call with target 'tts' is the read-aloud's sleep timer, decided in tts.js (its own switch, coreTts)
+  const route = (method, audio) => {
+    const audioServe = serve(audio)
+    return (args) => (args && args.target === 'tts' && tts ? tts.sleep(method, args) : audioServe(args))
+  }
 
   function start() {
     gate = bridge
@@ -429,10 +434,10 @@ export function sleepModule(bridge, { tick, db, now = () => Date.now(), log = ()
       )
     bridge.on('player', 'state', (d) => later(() => onPlayerState(d)))
     bridge.on('sensor', 'shake', () => later(handleShake)) // SleepTimerManager.kt:382 (via PlayerNotificationService.kt:2058)
-    bridge.serve('sleep', 'set', serve((a) => setManual(a).then((ok) => ({ ok }))))
-    bridge.serve('sleep', 'increase', serve((a) => increase(a.ms).then(() => ({ ok: true }))))
-    bridge.serve('sleep', 'decrease', serve((a) => decrease(a.ms).then(() => ({ ok: true }))))
-    bridge.serve('sleep', 'cancel', serve(() => cancel().then(() => ({ ok: true }))))
+    bridge.serve('sleep', 'set', route('set', (a) => setManual(a).then((ok) => ({ ok }))))
+    bridge.serve('sleep', 'increase', route('increase', (a) => increase(a.ms).then(() => ({ ok: true }))))
+    bridge.serve('sleep', 'decrease', route('decrease', (a) => decrease(a.ms).then(() => ({ ok: true }))))
+    bridge.serve('sleep', 'cancel', route('cancel', () => cancel().then(() => ({ ok: true }))))
     bridge.serve('sleep', 'resend', serve(() => resend().then(() => ({ ok: true }))))
   }
 

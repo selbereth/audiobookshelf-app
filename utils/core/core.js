@@ -16,6 +16,7 @@ import { sleepModule } from './modules/sleep'
 import { pebbleModule } from './modules/pebble'
 import { downloadsModule } from './modules/downloads'
 import { playerModule } from './modules/player'
+import { ttsModule } from './modules/tts'
 
 export function createCore(transport, { log = console.log, now = () => Date.now() } = {}) {
   const bridge = createBridge(transport)
@@ -47,7 +48,10 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
   })
   saver.start()
   // Sleep timer (Phase 5): start() reads the switch system.flags {coreSleep}, default off. While it is off Kotlin's SleepTimerManager runs
-  const sleep = sleepModule(bridge, { tick, db, now, log, emitToUi: (event, data) => emitToUi(event, data) })
+  // The read-aloud's sleep timer (Phase 10, slice B): switch coreTts. sleep.* calls with target 'tts' are routed to it
+  const tts = ttsModule(bridge, { tick, now, log, emitToUi: (event, data) => emitToUi(event, data) })
+  tts.start()
+  const sleep = sleepModule(bridge, { tick, db, now, log, emitToUi: (event, data) => emitToUi(event, data), tts })
   sleep.start()
   // The UI mirror of the device data (Phase 6): reads the switch system.flags {coreUi}, default off
   db.start()
@@ -65,5 +69,5 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
     return { ok: true }
   })
 
-  return { bridge, emitToUi, db, api, sync, progress, server, tick, saver, sleep, pebble, player }
+  return { bridge, emitToUi, db, api, sync, progress, server, tick, saver, sleep, tts, pebble, player }
 }
