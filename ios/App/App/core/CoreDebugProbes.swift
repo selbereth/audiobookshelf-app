@@ -47,12 +47,29 @@ enum CoreDebugProbes {
                 NSLog("[core probe] player.loadLocal ok=%@ %@", ok ? "true" : "false", json)
             }
         }
+        // Sleep timer (coreSleep on): a 15 s timer set through the core; the pause at zero is the core's call to player.pause
+        if FileManager.default.fileExists(atPath: docs.appendingPathComponent("sleep-test.flag").path) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+                NSLog("[core probe] sleep.set 15 s at %.0f", Date().timeIntervalSince1970)
+                CoreHost.shared.callUp("sleep", "set", ["ms": 15000, "isChapterTime": false], timeoutMs: 5000) { ok, json in
+                    NSLog("[core probe] sleep.set ok=%@ %@", ok ? "true" : "false", json)
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+                PlayerConnector.shared.call("getState", [:]) { ok, json in
+                    NSLog("[core probe] getState at 30 s (sleep) at %.0f %@", Date().timeIntervalSince1970, String(json.prefix(120)))
+                }
+            }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 7) {
             PlayerConnector.shared.call("getPosition", [:]) { ok, json in
                 NSLog("[core probe] player.getPosition at 7 s ok=%@ %@", ok ? "true" : "false", json)
             }
         }
+        // The pause check; not during the sleep test (the sleep timer is what pauses there)
+        let sleepFlag = docs.appendingPathComponent("sleep-test.flag").path
         DispatchQueue.main.asyncAfter(deadline: .now() + 9) {
+            guard !FileManager.default.fileExists(atPath: sleepFlag) else { return }
             PlayerConnector.shared.call("pause", [:]) { _, _ in
                 PlayerConnector.shared.call("getState", [:]) { ok, json in
                     NSLog("[core probe] player.getState after pause ok=%@ %@", ok ? "true" : "false", String(json.prefix(200)))
