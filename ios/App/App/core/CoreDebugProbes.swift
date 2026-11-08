@@ -55,6 +55,11 @@ enum CoreDebugProbes {
                     NSLog("[core probe] sleep.set ok=%@ %@", ok ? "true" : "false", json)
                 }
             }
+            // A shake injected at 12 s (no device): the core's sleep rule restarts the timer and buzzes (feedback.vibrate)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12) {
+                NSLog("[core probe] injected shake at %.0f", Date().timeIntervalSince1970)
+                SensorConnector.shared.shake()
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
                 PlayerConnector.shared.call("getState", [:]) { ok, json in
                     NSLog("[core probe] getState at 30 s (sleep) at %.0f %@", Date().timeIntervalSince1970, String(json.prefix(120)))

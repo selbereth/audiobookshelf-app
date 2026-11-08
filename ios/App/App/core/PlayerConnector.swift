@@ -310,6 +310,7 @@ final class SensorConnector: CoreConnector {
 
     /// Called by the view controller when the device is shaken
     func shake() {
+        NSLog("[sensor] shake registered=%@", registered ? "true" : "false")
         guard registered else { return }
         CoreHost.shared.emit("sensor", "shake")
     }
@@ -322,6 +323,7 @@ final class FeedbackConnector: CoreConnector {
         switch method {
         case "vibrate":
             let pattern = (args["pattern"] as? [NSNumber])?.map { $0.doubleValue } ?? []
+            NSLog("[feedback] vibrate pattern=%@", "\(pattern)")
             DispatchQueue.main.async {
                 var at = 0.0
                 for (i, ms) in pattern.enumerated() {
@@ -336,6 +338,7 @@ final class FeedbackConnector: CoreConnector {
             }
             reply(true, "")
         case "chime":
+            NSLog("[feedback] chime")
             DispatchQueue.main.async { UINotificationFeedbackGenerator().notificationOccurred(.success) }
             reply(true, "")
         default:
