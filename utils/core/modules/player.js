@@ -19,7 +19,7 @@
  *
  * Kept native (see the vault questions): the buffering and lazy-play filters that decide which events exist.
  */
-import { chapterAt, chapterStartMs } from './sleep'
+import { chapterAt, chapterStartMs, totalDurationMs } from './sleep'
 
 // KeyEvent codes (android.view.KeyEvent) and actions, as MediaSessionCallback.kt uses them
 export const KEY = { HEADSETHOOK: 79, STOP: 86, NEXT: 87, PREVIOUS: 88, REWIND: 89, FAST_FORWARD: 90, PLAY: 126, PAUSE: 127, PLAY_PAUSE: 85 }
@@ -141,6 +141,10 @@ export function playerModule(bridge, { db, tick, now = () => Date.now(), log = (
     await native('player', 'setSpeed', { speed: nextSpeed(rate) }) // MediaSessionCallback.kt:109-122 onChangeSpeed
   }
 
+  // ---- slice 3 (item 2): chapter skip (player/skipChapter {forward}) through chapterSkipModule
+  const skip = chapterSkipModule(native, totalDurationMs)
+  const skipChapter = async (d) => skip(d, await native('player', 'getState'))
+
   function start() {
     gate = bridge
       .call('system', 'flags', {})
@@ -154,6 +158,7 @@ export function playerModule(bridge, { db, tick, now = () => Date.now(), log = (
     bridge.on('player', 'state', (d) => later(() => onPlayerState(d)))
     bridge.on('player', 'mediaKey', (d) => later(() => mediaKey(d)))
     bridge.on('player', 'speedCycle', (d) => later(() => speedCycle(d)))
+    bridge.on('player', 'skipChapter', (d) => later(() => skipChapter(d)))
   }
 
   return {
@@ -164,7 +169,8 @@ export function playerModule(bridge, { db, tick, now = () => Date.now(), log = (
     /** For tests: the rules without a native event; resolves when they are done */
     handlePlayerState: (d) => later(() => onPlayerState(d)),
     handleMediaKey: (d) => later(() => mediaKey(d)),
-    handleSpeedCycle: (d) => later(() => speedCycle(d))
+    handleSpeedCycle: (d) => later(() => speedCycle(d)),
+    handleSkipChapter: (d) => later(() => skipChapter(d))
   }
 }
 
@@ -217,4 +223,92 @@ export function clickWindowPlan(n) {
   if (n === 2) return ['jumpBackward', 'play'] // :286-289
   if (n >= 3) return ['jumpForward', 'play'] // :290-293
   return [] // one press: nothing (it was the play or pause already)
+}
+
+// ---- slice 3 (item 2): chapter skip, track maths, the seek clamp. Quotes: web AudioPlayer.vue (chapter rules, master 96f28d39),
+// PlaybackSession.kt (tracks), PlayerNotificationService.kt (seekPlayer).
+
+/** AudioPlayer.vue:447 / :452 use the start and end rounded to 2 decimals (toFixed(2)), compared with the position in seconds */
+const r2 = (n) => Number(Number(n).toFixed(2))
+
+/** AudioPlayer.vue:446-447 currentChapter (the chapter containing the position) */
+export function chapterAtSec(chapters, t) {
+  return (chapters || []).find((ch) => r2(ch.start) <= t && r2(ch.end) > t) || null
+}
+
+/** AudioPlayer.vue:449-452 nextChapter: the first chapter that starts after the position */
+export function nextChapterAtSec(chapters, t) {
+  return (chapters || []).find((c) => r2(c.start) > t) || null
+}
+
+/**
+ * AudioPlayer.vue:579-584 jumpNextChapter: the seek target in seconds, or null (no seek: there is no next chapter).
+ * Quirk kept: the start is compared rounded, but the seek goes to the chapter's own start.
+ */
+export function nextChapterTarget(chapters, t) {
+  const next = nextChapterAtSec(chapters, t)
+  return next ? next.start : null // AudioPlayer.vue:583-584
+}
+
+/**
+ * AudioPlayer.vue:586-602 jumpChapterStart: the seek target in seconds, or null (no seek).
+ * No current chapter: restart (seek 0), :590-591. Within 4 s of the chapter start: the previous chapter's start, if there is one
+ * (:595-600), else nothing. Quirk kept: the previous-chapter search uses ch.end >= t (not rounded, not >), unlike currentChapter.
+ * More than 4 s in: back to the start of the current chapter (:602).
+ */
+export function chapterBackTarget(chapters, t) {
+  const cur = chapterAtSec(chapters, t)
+  if (!cur) return 0 // :590-591 restart()
+  if (t - cur.start <= 4) { // :595
+    const idx = (chapters || []).findIndex((ch) => Number(ch.start) <= t && Number(ch.end) >= t) // :596
+    if (idx > 0) return chapters[idx - 1].start // :597-599
+    return null // first chapter, within 4 s: nothing happens
+  }
+  return cur.start // :602 this.seek(this.currentChapter.start)
+}
+
+/**
+ * PlaybackSession.kt:90-99 getCurrentTrackIndex (the last track when none contains the time) and :136-140 getCurrentTrackTimeMs.
+ * Input: the track list (startOffset, duration in seconds) and a time in ms. Returns {index, offsetMs}.
+ */
+export function trackAt(tracks, ms) {
+  const list = tracks || []
+  let index = list.length - 1 // :98 return audioTracks.size - 1
+  for (let i = 0; i < list.length; i++) {
+    const startMs = Math.trunc(list[i].startOffset * 1000)
+    const endMs = startMs + Math.trunc(list[i].duration * 1000)
+    if (ms >= startMs && endMs > ms) { index = i; break } // :93-94
+  }
+  const startMs = list.length ? Math.trunc(list[index].startOffset * 1000) : 0
+  return { index, offsetMs: ms - startMs } // :137-139 currentTime - currentTrack.startOffset
+}
+
+/**
+ * PlayerNotificationService.kt:986-1005 seekPlayer: the time is clamped to 0 .. duration (with duration - 2000 above it), then the
+ * track index and offset are worked out for the player (:1000-1004). Quirk kept: with no session the duration is 0, so any time
+ * above 0 becomes -2000 (Kotlin getDuration() is 0 with no session, :828-830).
+ */
+export function seekPlan({ ms, durationMs, tracks }) {
+  let t = ms
+  if (t < 0) t = 0 // :989-990
+  else if (t > durationMs) t = durationMs - 2000 // :992-993
+  const { index, offsetMs } = trackAt(tracks, t)
+  return { ms: t, index, offsetMs }
+}
+
+/**
+ * The chapter skip, as a core decision (utils/core/modules/player.js). `player/skipChapter {forward}` from native (or the debug
+ * emit): reads the position and the chapters from getState, works out the target and asks native `player.seekTo {ms, index, offsetMs}`.
+ */
+export function chapterSkipModule(native, totalDuration) {
+  return async function skipChapter({ forward }, st) {
+    if (!st || !st.live || !st.session) return null
+    const chapters = st.session.chapters || []
+    const t = st.positionSec
+    const target = forward ? nextChapterTarget(chapters, t) : chapterBackTarget(chapters, t)
+    if (target == null) return null
+    const plan = seekPlan({ ms: Math.round(target * 1000), durationMs: totalDuration(st.session), tracks: st.session.audioTracks })
+    await native('player', 'seekTo', plan)
+    return plan
+  }
 }

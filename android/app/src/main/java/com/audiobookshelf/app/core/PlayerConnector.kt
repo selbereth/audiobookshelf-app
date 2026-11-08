@@ -45,7 +45,7 @@ object PlayerConnector : Connector {
   private val sessionReader = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
   private var connection: ServiceConnection? = null
 
-  private val commands = setOf("pause", "play", "setVolume", "seekBackward", "playPause", "pauseService", "playService", "jump", "setSpeed")
+  private val commands = setOf("pause", "play", "setVolume", "seekBackward", "playPause", "pauseService", "playService", "jump", "setSpeed", "seekTo")
 
   override fun call(method: String, args: JSONObject, reply: (Boolean, String) -> Unit) {
     when (method) {
@@ -87,6 +87,13 @@ object PlayerConnector : Connector {
           "playService" -> s?.play()
           "jump" -> if (args.optBoolean("forward")) s?.jumpForward() else s?.jumpBackward()
           "setSpeed" -> s?.setPlaybackSpeed(args.getDouble("speed").toFloat())
+          // Phase 9 (item 2): the core clamped the time and chose the track. Multi-track: the same calls as seekPlayer (:1000-1004)
+          "seekTo" -> if (s != null && s.currentPlayer.mediaItemCount > 1 && args.has("index")) {
+            s.currentPlaybackSession?.currentTime = args.getLong("ms") / 1000.0
+            s.currentPlayer.seekTo(args.getInt("index"), args.getLong("offsetMs"))
+          } else {
+            s?.seekPlayer(args.getLong("ms"))
+          }
         }
         Log.i(TAG, "player.$method (core) live=${s != null}")
         reply(true, JSONObject().put("live", s != null).toString())

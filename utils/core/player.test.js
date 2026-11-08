@@ -1,7 +1,7 @@
 import assert from 'assert'
 import { execSync } from 'child_process'
 import { tickModule } from './modules/tick'
-import { pauseSeekBackMs, pauseSeekAmountMs, playerModule, nextSpeed, mediaKeyPlan, clickWindowPlan, KEY, ACTION_DOWN, ACTION_UP } from './modules/player'
+import { pauseSeekBackMs, pauseSeekAmountMs, playerModule, nextSpeed, mediaKeyPlan, clickWindowPlan, KEY, ACTION_DOWN, ACTION_UP, nextChapterTarget, chapterBackTarget, trackAt, seekPlan } from './modules/player'
 
 // Every test quotes the Kotlin line it ports. `quote` reads that line from the Kotlin source at master 96f28d39 and checks the
 // needle is on it, so a quoted line that drifts from the source fails the test.
@@ -304,6 +304,90 @@ Object.assign(tests, {
   },
 })
 function handlersSpeed(w) { w.mod.handleSpeedCycle({ rate: 1.0 }) }
+
+// ---- slice 3 (item 2): chapter skip, track maths, the seek clamp
+const AV = 'components/app/AudioPlayer.vue'
+const PSN = 'android/app/src/main/java/com/audiobookshelf/app/player/PlayerNotificationService.kt'
+const PSE = 'android/app/src/main/java/com/audiobookshelf/app/data/PlaybackSession.kt'
+const qv = (line, needle) => quoteIn(AV, line, needle)
+const qp = (line, needle) => quoteIn(PSN, line, needle)
+const qs = (line, needle) => quoteIn(PSE, line, needle)
+const CH = [{ start: 0, end: 200 }, { start: 200, end: 400 }, { start: 400, end: 600 }]
+
+Object.assign(tests, {
+  'next chapter: the first chapter that starts after the position, seek to its start (AudioPlayer.vue:449-452, :583-584)'() {
+    qv(452, "return this.chapters.find((c) => Number(Number(c.start).toFixed(2)) > this.currentTime)")
+    qv(584, 'this.seek(this.nextChapter.start)')
+    assert.strictEqual(nextChapterTarget(CH, 50), 200)
+    assert.strictEqual(nextChapterTarget(CH, 200), 400, 'exactly on a chapter start: the next one, not this one')
+    assert.strictEqual(nextChapterTarget(CH, 500), null, 'the last chapter: no seek')
+  },
+
+  'next chapter quirk: the start is rounded to 2 decimals for the comparison only (AudioPlayer.vue:452)'() {
+    assert.strictEqual(nextChapterTarget([{ start: 0, end: 10 }, { start: 10.004, end: 20 }], 9.999), 10.004)
+    assert.strictEqual(nextChapterTarget([{ start: 0, end: 10 }, { start: 10.004, end: 20 }], 10.001), null, 'start rounds to 10.00 which is not after 10.001')
+  },
+
+  'previous chapter: more than 4 s in goes to the current chapter start (AudioPlayer.vue:595, :602)'() {
+    qv(595, 'if (this.currentTime - this.currentChapter.start <= 4) {')
+    qv(602, 'this.seek(this.currentChapter.start)')
+    assert.strictEqual(chapterBackTarget(CH, 250), 200)
+  },
+
+  'previous chapter: within 4 s goes to the previous chapter start (AudioPlayer.vue:596-599)'() {
+    qv(596, 'const currChapterIndex = this.chapters.findIndex((ch) => Number(ch.start) <= this.currentTime && Number(ch.end) >= this.currentTime)')
+    qv(597, 'if (currChapterIndex > 0) {')
+    qv(599, 'this.seek(prevChapter.start)')
+    assert.strictEqual(chapterBackTarget(CH, 203), 0, 'chapter 2 start is 200, within 4 s: previous is chapter 1 at 0')
+  },
+
+  'previous chapter quirks: first chapter within 4 s does nothing (null); no chapters restarts (AudioPlayer.vue:590-591)'() {
+    qv(590, 'if (!this.currentChapter) {')
+    assert.strictEqual(chapterBackTarget(CH, 2), null, 'no previous chapter: nothing happens, it does not restart')
+    assert.strictEqual(chapterBackTarget([], 12), 0, 'no chapters: restart (seek 0)')
+  },
+
+  'track maths: the track that contains the time, and the offset into it (PlaybackSession.kt:90-99, :136-140)'() {
+    qs(93, 'if (currentTimeMs >= track.startOffsetMs && (track.endOffsetMs > currentTimeMs)) {')
+    qs(97, 'return audioTracks.size - 1')
+    qs(138, 'val time = currentTime - currentTrack.startOffset')
+    const TR = [{ startOffset: 0, duration: 100 }, { startOffset: 100, duration: 50 }]
+    assert.deepStrictEqual(trackAt(TR, 120000), { index: 1, offsetMs: 20000 })
+    assert.deepStrictEqual(trackAt(TR, 0), { index: 0, offsetMs: 0 })
+    assert.deepStrictEqual(trackAt(TR, 150000), { index: 1, offsetMs: 50000 }, 'at the end of the last track: the last track (Kotlin :98)')
+    assert.deepStrictEqual(trackAt(TR, 160000), { index: 1, offsetMs: 60000 }, 'past the end: the last track, offset past its length (quirk, kept)')
+  },
+
+  'seek clamp: below 0 is 0, above the duration is duration minus 2 s (seekPlayer :989-993)'() {
+    qp(989, 'if (timeToSeek < 0) {')
+    qp(992, '} else if (timeToSeek > getDuration()) {')
+    const TR = [{ startOffset: 0, duration: 150 }]
+    assert.strictEqual(seekPlan({ ms: -5, durationMs: 150000, tracks: TR }).ms, 0)
+    assert.strictEqual(seekPlan({ ms: 151000, durationMs: 150000, tracks: TR }).ms, 148000)
+    assert.strictEqual(seekPlan({ ms: 60000, durationMs: 150000, tracks: TR }).ms, 60000)
+    assert.strictEqual(seekPlan({ ms: 5000, durationMs: 0, tracks: [] }).ms, -2000, 'quirk kept: no session, duration 0 (getDuration :828-830)')
+  },
+
+  async 'chapter skip in the core: getState gives the chapters, native gets player.seekTo with the clamped time, index and offset'() {
+    const calls = []
+    const handlers = new Map()
+    const bridge = {
+      call: (c, m, a) => {
+        calls.push({ c, m, a })
+        if (c === 'system') return Promise.resolve({ corePlayer: true })
+        if (c === 'player' && m === 'getState') return Promise.resolve({ live: true, positionSec: 50, rate: 1, session: { chapters: CH, audioTracks: [{ startOffset: 0, duration: 600 }] } })
+        return Promise.resolve({})
+      },
+      on: (c, e, h) => { handlers.set(c + '/' + e, h) },
+      serve: () => {}
+    }
+    const mod = playerModule(bridge, { db: { methods: { getDeviceData: async () => ({ deviceSettings: {} }) } }, tick: { start: async () => {}, stop: async () => {} }, now: () => 0, log: () => {} })
+    mod.start()
+    await mod.handleSkipChapter({ forward: true })
+    await new Promise((r) => setImmediate(r))
+    assert.deepStrictEqual(calls.filter((x) => x.m === 'seekTo').map((x) => x.a), [{ ms: 200000, index: 0, offsetMs: 200000 }])
+  },
+})
 
 let failed = 0
 let passed = 0
