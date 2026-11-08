@@ -43,6 +43,11 @@ class CoreDebugReceiver : BroadcastReceiver() {
         CoreSwitch.writeDownload(app, intent.getBooleanExtra("on", false))
         Log.i("CoreDebug", "coreDownload written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
       }
+      // Phase 9 switch: the core decides the auto-rewind after a pause. Applies at the next start of the app, like the others
+      "corePlayer" -> {
+        CoreSwitch.writePlayer(app, intent.getBooleanExtra("on", false))
+        Log.i("CoreDebug", "corePlayer written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
+      }
       // Phase 8 calls to the downloads connector: --es method partStep|retryOutcome|hasSpace, --es args '<json>'
       "downloads" -> {
         val method = intent.getStringExtra("method") ?: ""
@@ -86,6 +91,8 @@ class CoreDebugReceiver : BroadcastReceiver() {
       "crash" -> CoreHost.crashForTest()
       "timers" -> CoreHost.callUp("core", "timerTest", JSONObject().put("sleepMs", intent.getIntExtra("sleepMs", 60000)).put("durationMs", intent.getIntExtra("durationMs", 300000)), 5000) { _, _ -> }
       "cors" -> CoreHost.callUp("core", "httpTest", JSONObject().put("url", intent.getStringExtra("url") ?: ""), 20000) { _, _ -> }
+      // Reads the switches as the core sees them (the native answer to system.flags)
+      "flags" -> com.audiobookshelf.app.core.SystemConnector(app).call("flags", JSONObject()) { ok, json -> Log.i("CoreDebug", "flags ok=$ok $json") }
       "ping" -> {
         val sent = System.currentTimeMillis()
         CoreHost.callUp("core", "ping", JSONObject(), 5000) { ok, json -> Log.i("CoreDebug", "ping ok=$ok $json roundTripMs=${System.currentTimeMillis() - sent}") }

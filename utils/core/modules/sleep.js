@@ -41,7 +41,7 @@ const msOf = (sec) => Math.round(sec * 1000) // PlayerNotificationService.kt:806
 const parseHM = (s) => String(s || '0:0').split(':').map((n) => parseInt(n, 10)) // SleepTimerManager.kt:457-461
 
 // ---- session helpers: PlaybackSession.kt and the BookChapter / AudioTrack getters (JSON carries only the fields below)
-const chapterStartMs = (c) => Math.trunc(c.start * 1000) // DataClasses.kt:415 startMs
+export const chapterStartMs = (c) => Math.trunc(c.start * 1000) // DataClasses.kt:415 startMs
 const chapterEndMs = (c) => Math.trunc(c.end * 1000) // DataClasses.kt:417 endMs
 const trackStartMs = (t) => Math.trunc(t.startOffset * 1000) // AudioTrack.kt startOffsetMs
 const trackEndMs = (t) => trackStartMs(t) + Math.trunc(t.duration * 1000) // AudioTrack.kt endOffsetMs = startOffsetMs + durationMs
@@ -76,7 +76,7 @@ function nextTrackIndex(s) {
 }
 
 /** PlaybackSession.kt:111-116 getChapterForTime: the chapter that contains the time */
-function chapterAt(s, ms) {
+export function chapterAt(s, ms) {
   const chapters = s.chapters || []
   if (!chapters.length) return null
   return chapters.find((c) => ms >= chapterStartMs(c) && chapterEndMs(c) > ms) || null

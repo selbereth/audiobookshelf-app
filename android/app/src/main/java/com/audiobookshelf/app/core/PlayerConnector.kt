@@ -234,6 +234,7 @@ object PlayerConnector : Connector {
       .put("positionSec", s.getCurrentTimeSeconds())
       .put("rate", s.currentPlayer.playbackParameters.speed.toDouble())
       .put("error", error)
+      .put("atMs", System.currentTimeMillis()) // Phase 9: the native clock at the change (the auto-rewind times, not the core's)
     CoreHost.emit("player", "state", data)
   }
 
