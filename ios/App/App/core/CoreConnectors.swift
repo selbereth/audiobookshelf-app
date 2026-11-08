@@ -309,5 +309,8 @@ enum CoreConnectors {
         host.register("files", FilesConnector())
         host.register("device", DeviceConnector())
         host.register("wake", UnsupportedConnector("wake"))
+        host.register("player", PlayerConnector.shared)
+        host.register("sensor", SensorConnector.shared)
+        host.register("feedback", FeedbackConnector())
     }
 }

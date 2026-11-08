@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		13F047ECA106E35406CB928E /* CoreHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0171478A3F7A624B8FC6294 /* CoreHost.swift */; };
+		1677DFBC008EFE3A16313F91 /* PlayerConnector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5229451CD624831EE6EBA25B /* PlayerConnector.swift */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		3A200C1527D64D7E00CBF02E /* AudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A200C1427D64D7E00CBF02E /* AudioPlayer.swift */; };
 		3A90295F280968E700E1D427 /* PlaybackReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A90295E280968E700E1D427 /* PlaybackReport.swift */; };
@@ -31,6 +32,7 @@
 		4DF6C7172DB58ABF004059F1 /* AbsLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DF6C7162DB58ABF004059F1 /* AbsLogger.swift */; };
 		4DF74912287105C600AC7814 /* DeviceSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DF74911287105C600AC7814 /* DeviceSettings.swift */; };
 		4DFE2DA32D345C390000B204 /* MyViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DFE2DA22D345C390000B204 /* MyViewController.swift */; };
+		5030407C7D476180E1940D63 /* CoreDebugProbes.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5E91BEA83BC60D4FBCB832C /* CoreDebugProbes.swift */; };
 		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
 		504EC3081FED79650016851F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504EC3071FED79650016851F /* AppDelegate.swift */; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
@@ -116,6 +118,7 @@
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		504EC3131FED79650016851F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
+		5229451CD624831EE6EBA25B /* PlayerConnector.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PlayerConnector.swift; sourceTree = "<group>"; };
 		6F2516262E68DA3000F40541 /* LogEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogEntry.swift; sourceTree = "<group>"; };
 		71D4F6C62655E381021B3B22 /* CoreConnectors.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CoreConnectors.swift; sourceTree = "<group>"; };
 		827E2D5F086F25954B0B127A /* AbsCorePlugin.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AbsCorePlugin.swift; sourceTree = "<group>"; };
@@ -123,6 +126,7 @@
 		A1B2C3D42F00000200TTS002 /* AbsTts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AbsTts.swift; sourceTree = "<group>"; };
 		BE96D57E131924D520D57057 /* Pods-Audiobookshelf.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Audiobookshelf.debug.xcconfig"; path = "Target Support Files/Pods-Audiobookshelf/Pods-Audiobookshelf.debug.xcconfig"; sourceTree = "<group>"; };
 		D2F7F575384A63F1C47DE984 /* Pods-Audiobookshelf.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Audiobookshelf.release.xcconfig"; path = "Target Support Files/Pods-Audiobookshelf/Pods-Audiobookshelf.release.xcconfig"; sourceTree = "<group>"; };
+		D5E91BEA83BC60D4FBCB832C /* CoreDebugProbes.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CoreDebugProbes.swift; sourceTree = "<group>"; };
 		E0171478A3F7A624B8FC6294 /* CoreHost.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CoreHost.swift; sourceTree = "<group>"; };
 		E9D5504528AC1A3900C746DD /* LibraryItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryItem.swift; sourceTree = "<group>"; };
 		E9D5504728AC1A7A00C746DD /* MediaType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaType.swift; sourceTree = "<group>"; };
@@ -312,6 +316,8 @@
 			children = (
 				E0171478A3F7A624B8FC6294 /* CoreHost.swift */,
 				71D4F6C62655E381021B3B22 /* CoreConnectors.swift */,
+				5229451CD624831EE6EBA25B /* PlayerConnector.swift */,
+				D5E91BEA83BC60D4FBCB832C /* CoreDebugProbes.swift */,
 			);
 			name = core;
 			path = core;
@@ -604,6 +610,8 @@
 				13F047ECA106E35406CB928E /* CoreHost.swift in Sources */,
 				6F6FCBD8BFE1B9E8631DA840 /* CoreConnectors.swift in Sources */,
 				4B64F79D7916BB6AB649DE7D /* AbsCorePlugin.swift in Sources */,
+				1677DFBC008EFE3A16313F91 /* PlayerConnector.swift in Sources */,
+				5030407C7D476180E1940D63 /* CoreDebugProbes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
