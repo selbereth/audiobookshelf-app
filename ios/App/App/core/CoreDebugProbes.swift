@@ -25,6 +25,15 @@ enum CoreDebugProbes {
             }
         }
 
+        // coreDownload: the download decisions are answered by the core (no transfer on iOS yet)
+        let gb: Double = 1_073_741_824
+        CoreHost.shared.callUp("downloads", "hasSpace", ["availableBytes": 50 * 1_048_576, "totalBytes": gb], timeoutMs: 5000) { ok, json in
+            NSLog("[core probe] downloads.hasSpace 50 MiB ok=%@ %@", ok ? "true" : "false", json)
+        }
+        CoreHost.shared.callUp("downloads", "hasSpace", ["availableBytes": 200 * 1_048_576, "totalBytes": gb], timeoutMs: 5000) { ok, json in
+            NSLog("[core probe] downloads.hasSpace 200 MiB ok=%@ %@", ok ? "true" : "false", json)
+        }
+
         // Store: the same for a collection (one JSON file in Application Support)
         let store = StoreConnector.shared
         store.call("get", ["collection": "probe", "key": "n"]) { ok, json in
@@ -151,6 +160,7 @@ enum CoreDebugProbes {
           await core.addListener('core', (e) => window.__coreEvents.push(e));
           const device = await core.call({ method: 'db.getDeviceData', args: {} });
           await core.call({ method: 'hello', args: {} });
+          await core.call({ method: 'db.updateDeviceSettings', args: { disableAutoRewind: true } });
           await new Promise((r) => setTimeout(r, 800));
           window.__probeResult = JSON.stringify({ deviceKeys: Object.keys(device.result || {}), events: window.__coreEvents });
         })().catch((e) => { window.__probeResult = 'error ' + e.message; });
