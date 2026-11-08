@@ -16,6 +16,22 @@ class MyViewController: CAPBridgeViewController {
         // Do any additional setup after loading the view.
     }
     
+    override var canBecomeFirstResponder: Bool { true }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        becomeFirstResponder() // shake events go to the first responder
+        #if DEBUG
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { CoreDebugProbes.runWebView(self.webView) }
+        #endif
+    }
+
+    /// The shake, for the core's sensor connector (Android: SensorConnector.emitShake)
+    override func motionEnded(_ motion: UIEvent.EventSubtype, with event: UIEvent?) {
+        super.motionEnded(motion, with: event)
+        if motion == .motionShake { SensorConnector.shared.shake() }
+    }
+
     override open func capacitorDidLoad() {
         bridge?.registerPluginInstance(AbsDatabase())
         bridge?.registerPluginInstance(AbsAudioPlayer())
@@ -23,6 +39,7 @@ class MyViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(AbsFileSystem())
         bridge?.registerPluginInstance(AbsLogger())
         bridge?.registerPluginInstance(AbsTts())
+        bridge?.registerPluginInstance(AbsCorePlugin())
     }
     
 
