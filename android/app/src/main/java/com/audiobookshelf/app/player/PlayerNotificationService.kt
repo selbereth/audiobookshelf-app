@@ -626,6 +626,11 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   }
 
   fun handlePlayerPlaybackError(errorMessage: String) {
+    // Phase 9 (item 4): with corePlayer on and the core ready, the core decides the fallback (utils/core/modules/player.js)
+    if (com.audiobookshelf.app.core.CoreSwitch.corePlayer && com.audiobookshelf.app.core.CoreHost.isReady) {
+      if (currentPlaybackSession != null) com.audiobookshelf.app.core.PlayerConnector.emitPlaybackError(this, errorMessage)
+      return
+    }
     // On error and was attempting to direct play - fallback to transcode
     currentPlaybackSession?.let { playbackSession ->
       if (playbackSession.isDirectPlay) {
@@ -1240,6 +1245,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     AbsLogger.info(tag, "onLoadChildren: parentMediaId: $parentMediaId (${DeviceManager.serverConnectionConfigString})")
 
     result.detach()
+    // Phase 9 (item 5): with corePlayer on the core's tree answers the root, Libraries and Recent; a miss keeps the old tree below
+    if (com.audiobookshelf.app.core.CoreSwitch.corePlayer && com.audiobookshelf.app.core.CoreHost.isReady) {
+      com.audiobookshelf.app.core.PlayerConnector.browseChildren(parentMediaId, this)?.let {
+        result.sendResult(it)
+        return
+      }
+    }
 
     // Prevent crashing if app is restarted while browsing
     if ((parentMediaId != DOWNLOADS_ROOT && parentMediaId != AUTO_MEDIA_ROOT) && !firstLoadDone) {
@@ -1356,6 +1368,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                           mediaManager.allLibraryPersonalizationsDone
                   )
           onBrowseTreeInitialized()
+          com.audiobookshelf.app.core.PlayerConnector.emitBrowseInputs(mediaManager.serverItemsInProgress.size, mediaManager.serverLibraries, mediaManager.allLibraryPersonalizationsDone)
           val children =
                   browseTree[parentMediaId]?.map { item ->
                     Log.d(tag, "Found top menu item: ${item.description.title}")

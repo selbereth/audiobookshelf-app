@@ -1,9 +1,12 @@
 package com.audiobookshelf.app.core
 
+import android.content.Context
 import android.os.Handler
+import android.support.v4.media.MediaBrowserCompat
+import com.audiobookshelf.app.media.getUriToAbsIconDrawable
+import com.audiobookshelf.app.media.getUriToDrawable
 import android.os.Looper
 import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
@@ -45,7 +48,7 @@ object PlayerConnector : Connector {
   private val sessionReader = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
   private var connection: ServiceConnection? = null
 
-  private val commands = setOf("pause", "play", "setVolume", "seekBackward", "playPause", "pauseService", "playService", "jump", "setSpeed")
+  private val commands = setOf("pause", "play", "setVolume", "seekBackward", "playPause", "pauseService", "playService", "jump", "setSpeed", "seekTo", "closeOnError", "setBrowseTree")
 
   override fun call(method: String, args: JSONObject, reply: (Boolean, String) -> Unit) {
     when (method) {
@@ -87,6 +90,20 @@ object PlayerConnector : Connector {
           "playService" -> s?.play()
           "jump" -> if (args.optBoolean("forward")) s?.jumpForward() else s?.jumpBackward()
           "setSpeed" -> s?.setPlaybackSpeed(args.getDouble("speed").toFloat())
+          // Phase 9 (item 5): the core's browse tree (root, Libraries, Recent); native keeps it and builds the MediaItems from it
+          "setBrowseTree" -> browseTree = args.getJSONObject("tree")
+          // Phase 9 (item 4): the core decided the playback failure: the UI hears it, then the player closes (as handlePlayerPlaybackError did)
+          "closeOnError" -> {
+            s?.clientEventEmitter?.onPlaybackFailed(args.optString("errorMessage", "Unknown Error"))
+            s?.closePlayback(true)
+          }
+          // Phase 9 (item 2): the core clamped the time and chose the track. Multi-track: the same calls as seekPlayer (:1000-1004)
+          "seekTo" -> if (s != null && s.currentPlayer.mediaItemCount > 1 && args.has("index")) {
+            s.currentPlaybackSession?.currentTime = args.getLong("ms") / 1000.0
+            s.currentPlayer.seekTo(args.getInt("index"), args.getLong("offsetMs"))
+          } else {
+            s?.seekPlayer(args.getLong("ms"))
+          }
         }
         Log.i(TAG, "player.$method (core) live=${s != null}")
         reply(true, JSONObject().put("live", s != null).toString())
@@ -234,7 +251,60 @@ object PlayerConnector : Connector {
       .put("positionSec", s.getCurrentTimeSeconds())
       .put("rate", s.currentPlayer.playbackParameters.speed.toDouble())
       .put("error", error)
+      .put("atMs", System.currentTimeMillis()) // Phase 9: the native clock at the change (the auto-rewind times, not the core's)
     CoreHost.emit("player", "state", data)
+  }
+
+  /** Phase 9 (item 4): a playback error the core decides on (the direct play fallback). The payload is the one the app asks with, forceTranscode */
+  fun emitPlaybackError(s: PlayerNotificationService, errorMessage: String) {
+    val session = s.currentPlaybackSession ?: return
+    val data = JSONObject()
+      .put("playMethod", session.playMethod)
+      .put("errorMessage", errorMessage)
+      .put("libraryItemId", session.libraryItemId ?: JSONObject.NULL)
+      .put("episodeId", session.episodeId ?: JSONObject.NULL)
+      .put("payload", JSONObject(mapper.writeValueAsString(s.getPlayItemRequestPayload(true))))
+      .put("playbackRate", s.currentPlayer.playbackParameters.speed.toDouble())
+    CoreHost.emit("player", "playbackError", data)
+  }
+
+  /** Phase 9 (item 5): the browse tree from the core, or null (a miss: the old Kotlin tree answers). Only the root and the two lists */
+  @Volatile
+  var browseTree: JSONObject? = null
+
+  /** Native facts for the core's browse tree: items in progress, the libraries and whether the recents were loaded */
+  fun emitBrowseInputs(inProgressCount: Int, libraries: List<com.audiobookshelf.app.data.Library>, recentsLoaded: Boolean) {
+    val libs = org.json.JSONArray()
+    libraries.forEach { lib ->
+      libs.put(JSONObject().put("id", lib.id).put("name", lib.name).put("icon", lib.icon).put("stats", lib.stats?.let { JSONObject().put("numAudioFiles", it.numAudioFiles) } ?: JSONObject.NULL))
+    }
+    CoreHost.emit("player", "browseInputs", JSONObject().put("inProgressCount", inProgressCount).put("libraries", libs).put("recentsLoaded", recentsLoaded))
+  }
+
+  /** The MediaItems the core's tree gives for a parent, or null when the tree does not cover that parent (old tree answers) */
+  fun browseChildren(parentId: String, context: Context): MutableList<MediaBrowserCompat.MediaItem>? {
+    val tree = browseTree ?: return null
+    val list = when (parentId) {
+      "/" -> tree.optJSONArray("root")
+      "__LIBRARIES__", "__RECENTLY__" -> tree.optJSONObject("children")?.optJSONArray(parentId)
+      else -> null
+    } ?: return null
+    val out = mutableListOf<MediaBrowserCompat.MediaItem>()
+    for (i in 0 until list.length()) {
+      val o = list.getJSONObject(i)
+      val icon = o.optString("icon")
+      val art = when (icon) {
+        "continue" -> getUriToDrawable(context, com.audiobookshelf.app.R.drawable.exo_icon_localaudio)
+        "recent" -> getUriToDrawable(context, com.audiobookshelf.app.R.drawable.md_clock_outline)
+        "downloads" -> getUriToDrawable(context, com.audiobookshelf.app.R.drawable.exo_icon_downloaddone)
+        "libraries" -> getUriToDrawable(context, com.audiobookshelf.app.R.drawable.icon_library_folder)
+        else -> getUriToAbsIconDrawable(context, icon)
+      }
+      val desc = android.support.v4.media.MediaDescriptionCompat.Builder()
+        .setMediaId(o.getString("id")).setTitle(o.getString("title")).setIconUri(art).build()
+      out += MediaBrowserCompat.MediaItem(desc, MediaBrowserCompat.MediaItem.FLAG_BROWSABLE)
+    }
+    return out
   }
 
   fun emitSessionOpened(session: PlaybackSession) {

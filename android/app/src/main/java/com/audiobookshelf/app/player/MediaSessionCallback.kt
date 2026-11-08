@@ -15,6 +15,8 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
   var tag = "MediaSessionCallback"
 
   private var mediaButtonClickCount: Int = 0
+  // Key-up codes the core handles (KeyEvent HEADSETHOOK 79, PLAY 126, PAUSE 127, NEXT 87, PREVIOUS 88, STOP 86)
+  private val CORE_UP_KEYS = setOf(79, 126, 127, 87, 88, 86)
   private var mediaButtonClickTimeout: Long = 1000  //ms
 
   override fun onPrepare() {
@@ -107,6 +109,11 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
   }
 
   private fun onChangeSpeed() {
+    // Phase 9 (slice 2): the core picks the next preset and sets it (utils/core/modules/player.js nextSpeed)
+    if (com.audiobookshelf.app.core.CoreSwitch.corePlayer && com.audiobookshelf.app.core.CoreHost.isReady) {
+      com.audiobookshelf.app.core.CoreHost.emit("player", "speedCycle", org.json.JSONObject().put("rate", playerNotificationService.mediaManager.getSavedPlaybackRate().toDouble()))
+      return
+    }
     // cycle to next speed, only contains preset android app options, as each increment needs it's own icon
     // Rounding values in the event a non preset value (.5, 1, 1.2, 1.5, 2, 3) is selected in the phone app
     val mediaManager = playerNotificationService.mediaManager
@@ -170,6 +177,16 @@ class MediaSessionCallback(var playerNotificationService:PlayerNotificationServi
       } else {
         @Suppress("DEPRECATION")
         intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+      }
+      // Phase 9 (slice 2): with corePlayer on the core counts the presses and decides (utils/core/modules/player.js). The
+      // key-up codes that Kotlin does not handle answer false here, as before. Only while the core is ready (else Kotlin)
+      if (com.audiobookshelf.app.core.CoreSwitch.corePlayer && com.audiobookshelf.app.core.CoreHost.isReady) {
+        if (keyEvent == null) return true
+        if (keyEvent.action == KeyEvent.ACTION_UP && keyEvent.keyCode !in CORE_UP_KEYS) return false
+        if (keyEvent.action == KeyEvent.ACTION_DOWN || keyEvent.action == KeyEvent.ACTION_UP) {
+          com.audiobookshelf.app.core.CoreHost.emit("player", "mediaKey", org.json.JSONObject().put("keyCode", keyEvent.keyCode).put("action", keyEvent.action))
+        }
+        return true
       }
 
       Log.d(tag, "handleCallMediaButton keyEvent = $keyEvent | action ${keyEvent?.action}")

@@ -63,7 +63,8 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
 
     if (isPlaying) {
       Log.d(tag, "SeekBackTime: Player is playing")
-      if (lastPauseTime > 0 && DeviceManager.deviceData.deviceSettings?.disableAutoRewind != true) {
+      // Phase 9: with corePlayer on, the core seeks back (utils/core/modules/player.js); this block stays silent
+      if (!com.audiobookshelf.app.core.CoreSwitch.corePlayer && lastPauseTime > 0 && DeviceManager.deviceData.deviceSettings?.disableAutoRewind != true) {
         Log.d(tag, "SeekBackTime: playing started now set seek back time $lastPauseTime")
         var seekBackTime = calcPauseSeekBackTime()
         if (seekBackTime > 0) {

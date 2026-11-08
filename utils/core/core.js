@@ -15,6 +15,7 @@ import { saverModule } from './modules/saver'
 import { sleepModule } from './modules/sleep'
 import { pebbleModule } from './modules/pebble'
 import { downloadsModule } from './modules/downloads'
+import { playerModule } from './modules/player'
 
 export function createCore(transport, { log = console.log, now = () => Date.now() } = {}) {
   const bridge = createBridge(transport)
@@ -54,6 +55,9 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
   const pebble = pebbleModule(bridge, { api, server, db, log })
   // Download decisions (Phase 8, slice 1): pure calls, answered on demand while the switch coreDownload is on in native
   downloadsModule(bridge)
+  // Player control (Phase 9, slice 1): the auto-rewind after a pause. start() reads the switch system.flags {corePlayer}, default off
+  const player = playerModule(bridge, { db, tick, server, now, log })
+  player.start()
 
   // The UI says hello when it opens; the core answers and also sends an event, so both directions can be seen
   bridge.serve('core', 'hello', () => {
@@ -61,5 +65,5 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
     return { ok: true }
   })
 
-  return { bridge, emitToUi, db, api, sync, progress, server, tick, saver, sleep, pebble }
+  return { bridge, emitToUi, db, api, sync, progress, server, tick, saver, sleep, pebble, player }
 }
