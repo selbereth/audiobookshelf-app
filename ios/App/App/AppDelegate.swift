@@ -11,6 +11,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         // Override point for customization after application launch.
 
+        // The JS core (JavaScriptCore). The ping is a call up: native asks, the core answers through answerUp.
+        CoreConnectors.registerDefaults()
+        CoreHost.shared.start()
+        CoreHost.shared.callUp("core", "ping", timeoutMs: 5000) { ok, json in
+            NSLog("[core] ping ok=%@ %@", ok ? "true" : "false", json)
+        }
+
         let configuration = Realm.Configuration(
             schemaVersion: 21,
             migrationBlock: { [weak self] migration, oldSchemaVersion in
