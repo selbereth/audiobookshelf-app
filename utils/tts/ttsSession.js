@@ -1,5 +1,7 @@
 import ePub from 'epubjs'
 import { AbsTts, AbsAudioPlayer } from '@/plugins/capacitor'
+// The namespace, not a named import: the hidden headless page's shim does not export onCore
+import * as Capacitor from '@/plugins/capacitor'
 import { sentenceStream, earlierSections } from './sentenceStream'
 import { ChunkSender } from './chunkSender'
 import { saveEbookProgress } from '../ebookProgress'
@@ -407,7 +409,11 @@ class TtsSession {
       await AbsTts.addListener('error', (data) => {
         console.error('[TtsSession] error', data)
         this.toast?.error(data.message || this.str('MessageTtsError'))
-      })
+      }),
+      // Phase 10 (slice B): with coreTts on the core keeps the read-aloud sleep timer and sends its state here (same shape)
+      ...(typeof Capacitor.onCore === 'function'
+        ? [{ remove: await Capacitor.onCore((event, data) => { if (event === 'ttsSleepTimer') this.onSleepTimer(data) }) }]
+        : [])
     ]
 
     if (adopt) {

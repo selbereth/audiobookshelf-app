@@ -43,6 +43,11 @@ class CoreDebugReceiver : BroadcastReceiver() {
         CoreSwitch.writeDownload(app, intent.getBooleanExtra("on", false))
         Log.i("CoreDebug", "coreDownload written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
       }
+      // Phase 10 switch: the core decides the read-aloud's sleep timer. Applies at the next start of the app, like the others
+      "coreTts" -> {
+        CoreSwitch.writeTts(app, intent.getBooleanExtra("on", false))
+        Log.i("CoreDebug", "coreTts written on=${intent.getBooleanExtra("on", false)}: restart the app process for it to apply")
+      }
       // Phase 9 switch: the core decides the auto-rewind after a pause. Applies at the next start of the app, like the others
       "corePlayer" -> {
         CoreSwitch.writePlayer(app, intent.getBooleanExtra("on", false))
