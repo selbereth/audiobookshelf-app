@@ -66,6 +66,8 @@ class CoreDebugReceiver : BroadcastReceiver() {
       // Sleep timer calls to the core: --es method set|increase|decrease|cancel|resend, --el ms, --ez chapter
       "sleep" -> {
         val args = JSONObject().put("ms", intent.getLongExtra("ms", 0L)).put("isChapterTime", intent.getBooleanExtra("chapter", false)).put("sessionId", "debug")
+        // Phase 10: --es target tts sends the call to the read-aloud's timer (utils/core/modules/tts.js)
+        intent.getStringExtra("target")?.let { args.put("target", it) }
         val method = intent.getStringExtra("method") ?: ""
         CoreSleep.call(method, args) { ok, json -> Log.i("CoreDebug", "sleep.$method ok=$ok $json") }
       }
