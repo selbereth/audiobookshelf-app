@@ -17,6 +17,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         CoreHost.shared.callUp("core", "ping", timeoutMs: 5000) { ok, json in
             NSLog("[core] ping ok=%@ %@", ok ? "true" : "false", json)
         }
+        #if DEBUG
+        // Debug probes (simulator checks): the store through the core, and the http connector through server.ping to a closed port
+        CoreHost.shared.callUp("core", "db.getDeviceData", timeoutMs: 5000) { ok, json in
+            NSLog("[core probe] db.getDeviceData ok=%@ %@", ok ? "true" : "false", String(json.prefix(160)))
+        }
+        CoreHost.shared.callUp("core", "server.ping", ["address": "http://127.0.0.1:9"], timeoutMs: 8000) { ok, json in
+            NSLog("[core probe] server.ping closed port ok=%@ %@", ok ? "true" : "false", json)
+        }
+        #endif
 
         let configuration = Realm.Configuration(
             schemaVersion: 21,

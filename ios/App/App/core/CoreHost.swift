@@ -204,6 +204,12 @@ final class CoreHost {
         return text
     }
 
+    /// Any JSON value (object, array, string, number, bool) as a Foundation object
+    static func parseAny(_ text: String) -> Any? {
+        guard let data = text.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+    }
+
     static func parse(_ text: String) -> [String: Any] {
         guard let data = text.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data),

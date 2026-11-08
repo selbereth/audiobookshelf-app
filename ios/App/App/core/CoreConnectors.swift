@@ -256,13 +256,14 @@ final class TimerConnector: CoreConnector {
     }
 }
 
-/// `ui.emit({event, data})`: hands an event to the visible web view. The AbsCore plugin on iOS is not written yet (Phase 12 slice 3),
-/// so for now it is logged and reports delivered=false.
+/// `ui.emit({event, data})`: hands an event to the visible web view (AbsCorePlugin). Dropped when no UI is open.
 final class UiConnector: CoreConnector {
     func call(_ method: String, _ args: [String: Any], reply: @escaping (Bool, String) -> Void) {
         guard method == "emit" else { return reply(false, "unknown ui.\(method)") }
-        NSLog("[core] ui emit %@", (args["event"] as? String) ?? "?")
-        reply(true, CoreHost.json(["delivered": false]))
+        let event = (args["event"] as? String) ?? "?"
+        let data = (args["data"] as? [String: Any]) ?? [:]
+        let delivered = AbsCorePlugin.send(event, data)
+        reply(true, CoreHost.json(["delivered": delivered]))
     }
 }
 

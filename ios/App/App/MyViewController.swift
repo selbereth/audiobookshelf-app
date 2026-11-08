@@ -23,6 +23,7 @@ class MyViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(AbsFileSystem())
         bridge?.registerPluginInstance(AbsLogger())
         bridge?.registerPluginInstance(AbsTts())
+        bridge?.registerPluginInstance(AbsCorePlugin())
     }
     
 
