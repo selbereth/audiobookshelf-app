@@ -71,6 +71,7 @@ object CoreHost {
     register("timer", TimerConnector())
     register("system", SystemConnector(context))
     register("player", PlayerConnector)
+    register("tts", TtsConnector())
     register("pebble", PebbleConnector(context))
     SystemConnector.watchNetwork(context)
     register("ui", UiConnector())

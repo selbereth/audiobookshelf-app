@@ -711,6 +711,30 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
   fun switchToPlayer(useCastPlayer: Boolean) {
     val wasPlaying = currentPlayer.isPlaying
+    // Phase 10 (slice C1): with coreCast on and the core ready, the core says whether to switch and which player to stop
+    // (utils/core/modules/cast.js). No answer: the Kotlin rule below runs
+    if (com.audiobookshelf.app.core.CoreSwitch.coreCast && com.audiobookshelf.app.core.CoreHost.isReady) {
+      val current = if (currentPlayer == castPlayer) "cast" else "exo"
+      com.audiobookshelf.app.core.CoreCast.switchPlan(useCastPlayer, current, castPlayer != null, wasPlaying) { plan ->
+        if (plan == null) {
+          switchPlayerHere(useCastPlayer, wasPlaying)
+        } else if (plan.optBoolean("noop")) {
+          Log.d(tag, "switchToPlayer: the core says this player is already in use")
+        } else {
+          when (plan.optString("stop")) {
+            "exo" -> mPlayer.stop()
+            "cast" -> castPlayer?.stop()
+          }
+          switchPlayerTail(useCastPlayer, wasPlaying)
+        }
+      }
+      return
+    }
+    switchPlayerHere(useCastPlayer, wasPlaying)
+  }
+
+  /** The Kotlin rule of switchToPlayer (before Phase 10): returns at once when the player is already in use */
+  private fun switchPlayerHere(useCastPlayer: Boolean, wasPlaying: Boolean) {
     if (useCastPlayer) {
       if (currentPlayer == castPlayer) {
         Log.d(tag, "switchToPlayer: Already using Cast Player " + castPlayer?.deviceInfo)
@@ -728,7 +752,11 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
         castPlayer?.stop()
       }
     }
+    switchPlayerTail(useCastPlayer, wasPlaying)
+  }
 
+  /** The rest of switchToPlayer: the new player is set, and the session is prepared on it. Unchanged from before Phase 10 */
+  private fun switchPlayerTail(useCastPlayer: Boolean, wasPlaying: Boolean) {
     if (currentPlaybackSession == null) {
       Log.e(tag, "switchToPlayer: No Current playback session")
     } else {
@@ -775,18 +803,29 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     val currentVol = try { castPlayer?.getDeviceVolume() ?: 0 } catch (_: Exception) { 0 }
     val provider = object : VolumeProviderCompat(VolumeProviderCompat.VOLUME_CONTROL_ABSOLUTE, 100, currentVol) {
       override fun onSetVolumeTo(volume: Int) {
+        // Phase 10 (slice C1): with coreCast on the core clamps the value (utils/core/modules/cast.js); no answer: the clamp below
+        if (com.audiobookshelf.app.core.CoreSwitch.coreCast && com.audiobookshelf.app.core.CoreHost.isReady) {
+          com.audiobookshelf.app.core.CoreCast.volumeSet(volume) { v -> applyCastVolume(v ?: volume.coerceIn(0, 100)) }
+          return
+        }
         // Clamp, update UI immediately, then send to device
-        val clamped = volume.coerceIn(0, 100)
-        setCurrentVolume(clamped)
-        try { castPlayer?.setDeviceVolume(clamped) } catch (_: Exception) {}
+        applyCastVolume(volume.coerceIn(0, 100))
       }
 
       override fun onAdjustVolume(direction: Int) {
         // Use Android-provided step (−1, 0, +1). Clamp, update UI immediately, then send.
         val current = currentVolume
-        val target = (current + direction).coerceIn(0, 100)
-        setCurrentVolume(target)
-        try { castPlayer?.setDeviceVolume(target) } catch (_: Exception) {}
+        if (com.audiobookshelf.app.core.CoreSwitch.coreCast && com.audiobookshelf.app.core.CoreHost.isReady) {
+          com.audiobookshelf.app.core.CoreCast.volumeAdjust(current, direction) { v -> applyCastVolume(v ?: (current + direction).coerceIn(0, 100)) }
+          return
+        }
+        applyCastVolume((current + direction).coerceIn(0, 100))
+      }
+
+      /** Sets the volume shown and sends it to the Cast device (the same step for both paths) */
+      private fun applyCastVolume(volume: Int) {
+        setCurrentVolume(volume)
+        try { castPlayer?.setDeviceVolume(volume) } catch (_: Exception) {}
       }
     }
     remoteVolumeProvider = provider

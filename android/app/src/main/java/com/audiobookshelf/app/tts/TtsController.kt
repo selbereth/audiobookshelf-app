@@ -9,6 +9,9 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import android.util.Log
+import com.audiobookshelf.app.core.CoreHost
+import com.audiobookshelf.app.core.CoreSwitch
+import org.json.JSONObject
 import java.util.Locale
 
 data class TtsSentence(val id: Int, val text: String, val cfi: String, val spine: Int, val paragraph: Int)
@@ -253,10 +256,12 @@ class TtsController(private val context: Context) {
       var ended = false
       var needMore = false
       var sleepNow = false
+      var nextSpine: Int? = null
       synchronized(lock) {
         if (!queued.remove(id)) return // flushed/stale
         val idx = indexOfId(id)
         if (idx >= 0) cursor = minOf(idx + 1, store.size)
+        nextSpine = store.getOrNull(cursor)?.spine
         val sleepAt = sleepUntilSpine
         if (sleepAt != null && cursor < store.size && store[cursor].spine >= sleepAt) {
           sleepUntilSpine = null
@@ -274,6 +279,10 @@ class TtsController(private val context: Context) {
           needMoreSentFor = lastSeq
           needMore = true
         }
+      }
+      // Phase 10 (slice B): with coreTts on the core decides the end-of-chapter pause (utils/core/modules/tts.js) from the next spine
+      if (CoreSwitch.coreTts && CoreHost.isReady) {
+        CoreHost.emit("tts", "sentenceDone", JSONObject().put("nextSpine", nextSpine ?: JSONObject.NULL))
       }
       if (sleepNow) {
         // The next chapter starts: the cursor is already on its first sentence so resuming continues there
@@ -467,6 +476,8 @@ class TtsController(private val context: Context) {
         sleepUntilSpine = null
         listener?.onSleepTimer(0, false, false)
       }
+      // Phase 10 (slice B): with coreTts on the core clears its own chapter sleep here (utils/core/modules/tts.js onReset)
+      if (CoreSwitch.coreTts && CoreHost.isReady) CoreHost.emit("tts", "reset", JSONObject())
     }
   }
 

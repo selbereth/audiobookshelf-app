@@ -27,7 +27,7 @@ class SystemConnector(private val context: Context) : Connector {
         reply(true, JSONObject().put("versionName", info.versionName).put("versionCode", info.longVersionCode).put("packageName", context.packageName).toString())
       }
       "network" -> reply(true, networkFacts(context).toString())
-      "flags" -> reply(true, JSONObject().put("coreSaver", CoreSwitch.coreSaver).put("coreSleep", CoreSwitch.coreSleep).put("coreUi", CoreSwitch.coreUi).put("corePebble", CoreSwitch.corePebble).put("coreDownload", CoreSwitch.coreDownload).put("corePlayer", CoreSwitch.corePlayer).toString())
+      "flags" -> reply(true, JSONObject().put("coreSaver", CoreSwitch.coreSaver).put("coreSleep", CoreSwitch.coreSleep).put("coreUi", CoreSwitch.coreUi).put("corePebble", CoreSwitch.corePebble).put("coreDownload", CoreSwitch.coreDownload).put("corePlayer", CoreSwitch.corePlayer).put("coreTts", CoreSwitch.coreTts).put("coreCast", CoreSwitch.coreCast).toString())
       else -> reply(false, "unknown system.$method")
     }
   }
