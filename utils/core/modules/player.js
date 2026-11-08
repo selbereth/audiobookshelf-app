@@ -61,7 +61,7 @@ export function pauseSeekAmountMs({ pausedAtMs, nowMs, disableAutoRewind, positi
   return seekBack
 }
 
-export function playerModule(bridge, { db, tick, now = () => Date.now(), log = () => {} } = {}) {
+export function playerModule(bridge, { db, tick, server = null, now = () => Date.now(), log = () => {} } = {}) {
   let pausedAt = 0 // PlayerListener.lastPauseTime (ms, native clock); 0 = no pause to measure
   let clicks = 0 // MediaSessionCallback.mediaButtonClickCount
   let gate = Promise.resolve(false) // the switch, read once by start()
@@ -145,6 +145,10 @@ export function playerModule(bridge, { db, tick, now = () => Date.now(), log = (
   const skip = chapterSkipModule(native, totalDurationMs)
   const skipChapter = async (d) => skip(d, await native('player', 'getState'))
 
+  // ---- slice 4 (item 4): the playback error fallback through the core's server.playItem (needs server)
+  const playbackError = server ? playbackErrorModule(native, server) : null
+  const onPlaybackError = (d) => (playbackError ? playbackError(d) : null)
+
   function start() {
     gate = bridge
       .call('system', 'flags', {})
@@ -159,6 +163,7 @@ export function playerModule(bridge, { db, tick, now = () => Date.now(), log = (
     bridge.on('player', 'mediaKey', (d) => later(() => mediaKey(d)))
     bridge.on('player', 'speedCycle', (d) => later(() => speedCycle(d)))
     bridge.on('player', 'skipChapter', (d) => later(() => skipChapter(d)))
+    bridge.on('player', 'playbackError', (d) => later(() => onPlaybackError(d)))
   }
 
   return {
@@ -170,7 +175,8 @@ export function playerModule(bridge, { db, tick, now = () => Date.now(), log = (
     handlePlayerState: (d) => later(() => onPlayerState(d)),
     handleMediaKey: (d) => later(() => mediaKey(d)),
     handleSpeedCycle: (d) => later(() => speedCycle(d)),
-    handleSkipChapter: (d) => later(() => skipChapter(d))
+    handleSkipChapter: (d) => later(() => skipChapter(d)),
+    handlePlaybackError: (d) => later(() => onPlaybackError(d))
   }
 }
 
@@ -310,5 +316,41 @@ export function chapterSkipModule(native, totalDuration) {
     const plan = seekPlan({ ms: Math.round(target * 1000), durationMs: totalDuration(st.session), tracks: st.session.audioTracks })
     await native('player', 'seekTo', plan)
     return plan
+  }
+}
+
+// ---- slice 4 (item 4): restart near the end, the playback error fallback, play from id. Quotes: PlayerNotificationService.kt
+// (preparePlayer, handlePlayerPlaybackError) and MediaSessionCallback.kt (onPlayFromMediaId), master 96f28d39.
+
+/** PlayerNotificationService.kt:451-453: a session within 5 s of its end starts again from 0 */
+export function restartPosition({ durationSec, currentSec }) {
+  if (durationSec - currentSec < 5) return 0 // :451 duration - currentTime < 5, :453 currentTime = 0.0
+  return currentSec
+}
+
+/**
+ * PlayerNotificationService.kt:628-650 handlePlayerPlaybackError: a direct play (playMethod 0, PLAYMETHOD_DIRECTPLAY) asks the
+ * server again with forceTranscode (:631-632); anything else is a failure (:648-649). PlayerConstants.kt:9.
+ */
+export function playbackErrorPlan({ playMethod }) {
+  return playMethod === 0 ? 'transcode' : 'fail'
+}
+
+/** MediaSessionCallback.kt:131-132: an empty media id plays the first item; any other id is looked up (native lists are kept there) */
+export function playFromIdPlan(mediaId) {
+  return mediaId == null || mediaId === '' ? 'first' : 'lookup'
+}
+
+/**
+ * The error fallback as a core decision. `player/playbackError {playMethod, errorMessage, libraryItemId, episodeId, payload,
+ * playbackRate}` from native. A transcode: server.playItem with the payload native built with forceTranscode, then
+ * player.loadSession. A failure, or a request that fails: player.closeOnError (Kotlin's onPlaybackFailed then closePlayback(true)).
+ */
+export function playbackErrorModule(native, server) {
+  return async function onPlaybackError(d) {
+    if (playbackErrorPlan(d) === 'fail') return native('player', 'closeOnError', { errorMessage: d.errorMessage }) // :647-649
+    const r = await server.playItem({ libraryItemId: d.libraryItemId, episodeId: d.episodeId, payload: d.payload })
+    if (!r || r.error || !r.id) return native('player', 'closeOnError', { errorMessage: d.errorMessage }) // :639-641
+    return native('player', 'loadSession', { session: r, playbackRate: d.playbackRate }) // :643 preparePlayer(it, true, null)
   }
 }

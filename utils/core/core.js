@@ -56,7 +56,7 @@ export function createCore(transport, { log = console.log, now = () => Date.now(
   // Download decisions (Phase 8, slice 1): pure calls, answered on demand while the switch coreDownload is on in native
   downloadsModule(bridge)
   // Player control (Phase 9, slice 1): the auto-rewind after a pause. start() reads the switch system.flags {corePlayer}, default off
-  const player = playerModule(bridge, { db, tick, now, log })
+  const player = playerModule(bridge, { db, tick, server, now, log })
   player.start()
 
   // The UI says hello when it opens; the core answers and also sends an event, so both directions can be seen

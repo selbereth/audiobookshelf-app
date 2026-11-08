@@ -45,7 +45,7 @@ object PlayerConnector : Connector {
   private val sessionReader = jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
   private var connection: ServiceConnection? = null
 
-  private val commands = setOf("pause", "play", "setVolume", "seekBackward", "playPause", "pauseService", "playService", "jump", "setSpeed", "seekTo")
+  private val commands = setOf("pause", "play", "setVolume", "seekBackward", "playPause", "pauseService", "playService", "jump", "setSpeed", "seekTo", "closeOnError")
 
   override fun call(method: String, args: JSONObject, reply: (Boolean, String) -> Unit) {
     when (method) {
@@ -87,6 +87,11 @@ object PlayerConnector : Connector {
           "playService" -> s?.play()
           "jump" -> if (args.optBoolean("forward")) s?.jumpForward() else s?.jumpBackward()
           "setSpeed" -> s?.setPlaybackSpeed(args.getDouble("speed").toFloat())
+          // Phase 9 (item 4): the core decided the playback failure: the UI hears it, then the player closes (as handlePlayerPlaybackError did)
+          "closeOnError" -> {
+            s?.clientEventEmitter?.onPlaybackFailed(args.optString("errorMessage", "Unknown Error"))
+            s?.closePlayback(true)
+          }
           // Phase 9 (item 2): the core clamped the time and chose the track. Multi-track: the same calls as seekPlayer (:1000-1004)
           "seekTo" -> if (s != null && s.currentPlayer.mediaItemCount > 1 && args.has("index")) {
             s.currentPlaybackSession?.currentTime = args.getLong("ms") / 1000.0
@@ -243,6 +248,19 @@ object PlayerConnector : Connector {
       .put("error", error)
       .put("atMs", System.currentTimeMillis()) // Phase 9: the native clock at the change (the auto-rewind times, not the core's)
     CoreHost.emit("player", "state", data)
+  }
+
+  /** Phase 9 (item 4): a playback error the core decides on (the direct play fallback). The payload is the one the app asks with, forceTranscode */
+  fun emitPlaybackError(s: PlayerNotificationService, errorMessage: String) {
+    val session = s.currentPlaybackSession ?: return
+    val data = JSONObject()
+      .put("playMethod", session.playMethod)
+      .put("errorMessage", errorMessage)
+      .put("libraryItemId", session.libraryItemId ?: JSONObject.NULL)
+      .put("episodeId", session.episodeId ?: JSONObject.NULL)
+      .put("payload", JSONObject(mapper.writeValueAsString(s.getPlayItemRequestPayload(true))))
+      .put("playbackRate", s.currentPlayer.playbackParameters.speed.toDouble())
+    CoreHost.emit("player", "playbackError", data)
   }
 
   fun emitSessionOpened(session: PlaybackSession) {

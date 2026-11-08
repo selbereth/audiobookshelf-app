@@ -626,6 +626,11 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   }
 
   fun handlePlayerPlaybackError(errorMessage: String) {
+    // Phase 9 (item 4): with corePlayer on and the core ready, the core decides the fallback (utils/core/modules/player.js)
+    if (com.audiobookshelf.app.core.CoreSwitch.corePlayer && com.audiobookshelf.app.core.CoreHost.isReady) {
+      if (currentPlaybackSession != null) com.audiobookshelf.app.core.PlayerConnector.emitPlaybackError(this, errorMessage)
+      return
+    }
     // On error and was attempting to direct play - fallback to transcode
     currentPlaybackSession?.let { playbackSession ->
       if (playbackSession.isDirectPlay) {

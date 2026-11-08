@@ -1,7 +1,7 @@
 import assert from 'assert'
 import { execSync } from 'child_process'
 import { tickModule } from './modules/tick'
-import { pauseSeekBackMs, pauseSeekAmountMs, playerModule, nextSpeed, mediaKeyPlan, clickWindowPlan, KEY, ACTION_DOWN, ACTION_UP, nextChapterTarget, chapterBackTarget, trackAt, seekPlan } from './modules/player'
+import { pauseSeekBackMs, pauseSeekAmountMs, playerModule, nextSpeed, mediaKeyPlan, clickWindowPlan, KEY, ACTION_DOWN, ACTION_UP, nextChapterTarget, chapterBackTarget, trackAt, seekPlan, restartPosition, playbackErrorPlan, playFromIdPlan } from './modules/player'
 
 // Every test quotes the Kotlin line it ports. `quote` reads that line from the Kotlin source at master 96f28d39 and checks the
 // needle is on it, so a quoted line that drifts from the source fails the test.
@@ -386,6 +386,65 @@ Object.assign(tests, {
     await mod.handleSkipChapter({ forward: true })
     await new Promise((r) => setImmediate(r))
     assert.deepStrictEqual(calls.filter((x) => x.m === 'seekTo').map((x) => x.a), [{ ms: 200000, index: 0, offsetMs: 200000 }])
+  },
+})
+
+// ---- slice 4 (item 4): restart near the end, the error fallback, play from id
+const PSN4 = PSN
+const MSC4 = MSC
+const q4 = (line, needle) => quoteIn(PSN4, line, needle)
+const qm4 = (line, needle) => quoteIn(MSC4, line, needle)
+
+Object.assign(tests, {
+  'restart near the end: within 5 s of the end the session starts from 0 (preparePlayer :451-453)'() {
+    q4(451, 'if (playbackSession.duration - playbackSession.currentTime < 5) {')
+    q4(453, 'playbackSession.currentTime = 0.0')
+    assert.strictEqual(restartPosition({ durationSec: 600, currentSec: 596 }), 0)
+    assert.strictEqual(restartPosition({ durationSec: 600, currentSec: 595 }), 595, 'exactly 5 s left is not within 5 s (strict <)')
+    assert.strictEqual(restartPosition({ durationSec: 600, currentSec: 594 }), 594)
+  },
+
+  'error fallback: only a direct play is asked again with forceTranscode; the rest fails (handlePlayerPlaybackError :631, :648-649)'() {
+    q4(631, 'if (playbackSession.isDirectPlay) {')
+    q4(632, 'val playItemRequestPayload = getPlayItemRequestPayload(true)')
+    q4(649, 'closePlayback(true)')
+    assert.strictEqual(playbackErrorPlan({ playMethod: 0 }), 'transcode')
+    assert.strictEqual(playbackErrorPlan({ playMethod: 1 }), 'fail', 'direct stream (1) is not a direct play')
+    assert.strictEqual(playbackErrorPlan({ playMethod: 2 }), 'fail')
+    assert.strictEqual(playbackErrorPlan({ playMethod: 3 }), 'fail')
+  },
+
+  'play from id: an empty id plays the first item, any other id is looked up (onPlayFromMediaId :131-132)'() {
+    qm4(131, 'if (mediaId.isNullOrEmpty()) {')
+    qm4(132, 'libraryItemWrapper = playerNotificationService.mediaManager.getFirstItem()')
+    assert.strictEqual(playFromIdPlan(''), 'first')
+    assert.strictEqual(playFromIdPlan(null), 'first')
+    assert.strictEqual(playFromIdPlan('li_x'), 'lookup')
+  },
+
+  async 'error fallback in the core: transcode request, then loadSession with the new session; a failed request closes on error'() {
+    const run = async (playItemResult, playMethod) => {
+      const calls = []
+      const handlers = new Map()
+      const bridge = {
+        call: (c, m, a) => {
+          calls.push({ c, m, a })
+          if (c === 'system') return Promise.resolve({ corePlayer: true })
+          return Promise.resolve({})
+        },
+        on: (c, e, h) => { handlers.set(c + '/' + e, h) },
+        serve: () => {}
+      }
+      const server = { playItem: async (a) => { calls.push({ c: 'server', m: 'playItem', a }); return playItemResult } }
+      const mod = playerModule(bridge, { db: { methods: { getDeviceData: async () => ({ deviceSettings: {} }) } }, tick: { start: async () => {}, stop: async () => {} }, server, now: () => 0, log: () => {} })
+      mod.start()
+      await mod.handlePlaybackError({ playMethod, errorMessage: 'boom', libraryItemId: 'li_1', episodeId: null, payload: { forceTranscode: true }, playbackRate: 1.5 })
+      await new Promise((r) => setImmediate(r))
+      return calls.filter((x) => x.c !== 'system').map((x) => x.c + '.' + x.m)
+    }
+    assert.deepStrictEqual(await run({ id: 'sess2', audioTracks: [] }, 0), ['server.playItem', 'player.loadSession'])
+    assert.deepStrictEqual(await run({ error: 'no connection' }, 0), ['server.playItem', 'player.closeOnError'])
+    assert.deepStrictEqual(await run({ id: 'sess2' }, 2), ['player.closeOnError'], 'a transcode that failed is not asked again')
   },
 })
 
