@@ -19,6 +19,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
         #if DEBUG
         CoreDebugProbes.runAtLaunch()
+        CoreDebugProbes.runServer()
         #endif
 
         let configuration = Realm.Configuration(

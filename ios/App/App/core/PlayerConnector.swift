@@ -5,7 +5,7 @@ import MediaPlayer
 /// `player.*` on AVPlayer (iOS counterpart of android/.../core/PlayerConnector.kt). Facts and commands only: the core decides
 /// what a change means (the saver, the sleep timer). Events up: `player state {reason, sessionId, playing, positionSec, rate, error}`
 /// with reason playing, paused, seeked, ended, rate, closed; `session opened {session}`. All AVPlayer work is on the main queue.
-/// Not on iOS yet: loadSession (server sessions), playItemPayload, jump (the app's jump amounts are a setting the core does not read).
+/// loadSession plays the first track of a server session (multi-track books: first track only, for now).
 final class PlayerConnector: CoreConnector {
     static let shared = PlayerConnector()
 
@@ -32,6 +32,8 @@ final class PlayerConnector: CoreConnector {
         case "bind":
             reply(true, CoreHost.json(["live": true]))
         case "release":
+            if player != nil { emitState("closed") }
+            release()
             reply(true, "{}")
         case "getPosition":
             reply(true, CoreHost.json(snapshot(withSession: false)))
@@ -39,9 +41,10 @@ final class PlayerConnector: CoreConnector {
             reply(true, CoreHost.json(snapshot(withSession: true)))
         case "loadLocal":
             loadLocal(args, reply)
-        case "loadSession", "playItemPayload":
-            reply(true, CoreHost.json(["ok": false, "reason": "failed"]))
-            NSLog("[player] %@ not on iOS yet", method)
+        case "loadSession":
+            loadSession(args, reply)
+        case "playItemPayload":
+            reply(true, CoreHost.json(ok: true, extra: ["payload": PlayItemPayload.build()]))
         case "play", "playService":
             command { $0.play() }
             reply(true, CoreHost.json(["live": player != nil]))
@@ -54,6 +57,8 @@ final class PlayerConnector: CoreConnector {
         case "setVolume":
             player?.volume = Float((args["volume"] as? NSNumber)?.doubleValue ?? 1)
             reply(true, CoreHost.json(["live": player != nil]))
+        case "jump":
+            jump(forward: (args["forward"] as? Bool) ?? false, reply)
         case "seekBackward":
             let ms = (args["ms"] as? NSNumber)?.doubleValue ?? 0
             seek(toSeconds: max(0, currentSeconds() - ms / 1000), reason: "seeked")
@@ -82,12 +87,7 @@ final class PlayerConnector: CoreConnector {
             return reply(true, CoreHost.json(["ok": false, "reason": "failed"]))
         }
         let rate = Float((args["playbackRate"] as? NSNumber)?.doubleValue ?? 1)
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            NSLog("[player] audio session failed: %@", error.localizedDescription)
-        }
+        activateAudioSession()
         release()
         let newItem = AVPlayerItem(url: URL(fileURLWithPath: path))
         let p = AVPlayer(playerItem: newItem)
@@ -102,6 +102,67 @@ final class PlayerConnector: CoreConnector {
         NSLog("[player] loadLocal %@ rate=%.2f", title, rate)
         CoreHost.shared.emit("session", "opened", ["session": session ?? [:]])
         reply(true, CoreHost.json(["ok": true]))
+    }
+
+    /// Loads a server session (the JSON server.playItem answered): the first audio track from serverAddress + contentUrl with the
+    /// Bearer token, seeked to the session's currentTime. Multi-track books play their first track only (not on iOS yet).
+    private func loadSession(_ args: [String: Any], _ reply: @escaping (Bool, String) -> Void) {
+        guard let session = args["session"] as? [String: Any],
+              let tracks = session["audioTracks"] as? [[String: Any]], let first = tracks.first,
+              let contentUrl = first["contentUrl"] as? String,
+              let address = (session["serverAddress"] as? String) ?? (args["address"] as? String),
+              let url = URL(string: address + contentUrl) else {
+            NSLog("[player] loadSession: no playable track in the session")
+            return reply(true, CoreHost.json(["ok": false, "reason": "failed"]))
+        }
+        let token = (args["token"] as? String) ?? (session["accessToken"] as? String) ?? ""
+        let rate = Float((args["playbackRate"] as? NSNumber)?.doubleValue ?? 1)
+        let start = (session["currentTime"] as? NSNumber)?.doubleValue ?? 0
+        activateAudioSession()
+        release()
+        let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(token)"]])
+        let newItem = AVPlayerItem(asset: asset)
+        let p = AVPlayer(playerItem: newItem)
+        player = p
+        item = newItem
+        sessionId = (session["id"] as? String) ?? UUID().uuidString
+        var stored = session
+        stored["accessToken"] = nil // the token is not sent to the core or the log
+        self.session = stored
+        title = (session["displayTitle"] as? String) ?? (contentUrl as NSString).lastPathComponent
+        observe(p, newItem)
+        if start > 0 {
+            p.seek(to: CMTime(seconds: start, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+        p.play()
+        p.rate = rate
+        NSLog("[player] loadSession %@ from %@ at %.1f s rate=%.2f", sessionId ?? "", url.absoluteString, start, rate)
+        CoreHost.shared.emit("session", "opened", ["session": stored])
+        reply(true, CoreHost.json(["ok": true]))
+    }
+
+    /// The forward or backward jump, by the amount in the device settings the core stores (jumpForwardTime / jumpBackwardsTime)
+    private func jump(forward: Bool, _ reply: @escaping (Bool, String) -> Void) {
+        guard player != nil else { return reply(true, CoreHost.json(["live": false])) }
+        StoreConnector.shared.call("get", ["collection": "device", "key": "data"]) { _, json in
+            let data = CoreHost.parse(CoreHost.parse(json)["value"] as? String ?? "")
+            let settings = data["deviceSettings"] as? [String: Any] ?? [:]
+            let amount = (settings[forward ? "jumpForwardTime" : "jumpBackwardsTime"] as? NSNumber)?.doubleValue ?? 10
+            DispatchQueue.main.async {
+                let target = self.currentSeconds() + (forward ? amount : -amount)
+                self.seek(toSeconds: max(0, target), reason: "seeked")
+                reply(true, CoreHost.json(["live": true]))
+            }
+        }
+    }
+
+    private func activateAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            NSLog("[player] audio session failed: %@", error.localizedDescription)
+        }
     }
 
     private func observe(_ p: AVPlayer, _ i: AVPlayerItem) {
@@ -280,5 +341,25 @@ final class FeedbackConnector: CoreConnector {
         default:
             reply(false, "unknown feedback.\(method)")
         }
+    }
+}
+
+/// The payload server.playItem asks for (device and codecs), as the app builds it on Android (getPlayItemRequestPayload)
+enum PlayItemPayload {
+    static func build() -> [String: Any] {
+        let device = UIDevice.current
+        return [
+            "deviceInfo": [
+                "clientName": "Audiobookshelf iOS",
+                "deviceId": device.identifierForVendor?.uuidString ?? "",
+                "clientVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
+                "manufacturer": "Apple",
+                "model": device.model,
+                "osVersion": device.systemVersion
+            ],
+            "supportedMimeTypes": ["audio/mpeg", "audio/mp4", "audio/aac", "audio/flac", "audio/ogg", "audio/x-m4a"],
+            "mediaPlayer": "ios",
+            "forceDirectPlay": true
+        ]
     }
 }

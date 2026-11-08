@@ -46,6 +46,7 @@ final class HttpConnector: CoreConnector {
 /// `store`: key-value, JSON strings in and out (get, put, putMany, delete, clear, list). One JSON file per collection in
 /// Application Support/core-store, written on every change. Serial queue: the core may call from any thread.
 final class StoreConnector: CoreConnector {
+    static let shared = StoreConnector()
     private let queue = DispatchQueue(label: "abs.core.store")
     private var cache: [String: [String: String]] = [:]
 
@@ -171,9 +172,12 @@ final class SystemConnector: CoreConnector {
         monitor.start(queue: DispatchQueue(label: "abs.core.network"))
     }
 
+    /// The Android rule for `connected` (DeviceManager.checkConnectivity): any cellular, wifi or ethernet transport.
+    /// `validated` is the path being satisfied (no NET_CAPABILITY_VALIDATED on iOS).
     static func facts(_ path: NWPath) -> [String: Any] {
-        [
-            "connected": path.status == .satisfied,
+        let transport = path.usesInterfaceType(.cellular) || path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
+        return [
+            "connected": path.status == .satisfied && transport,
             "metered": path.isExpensive,
             "wifi": path.usesInterfaceType(.wifi),
             "validated": path.status == .satisfied
@@ -210,16 +214,24 @@ final class SystemConnector: CoreConnector {
     }
 }
 
-/// The core switches, read from UserDefaults (the iOS counterpart of CoreSwitch.kt). Default off. Keys `core.<name>`.
+/// The core switches (the iOS counterpart of CoreSwitch.kt). Default off. Keys `core.<name>` in UserDefaults; set with
+/// `-core.coreSaver YES` at launch or `defaults write`. Read once per process: freeze() at core start, like Android's load().
 enum CoreSwitch {
     static let names = ["coreSaver", "coreSleep", "coreUi", "corePebble", "coreDownload"]
+    private static var frozen: [String: Bool]?
 
     static func isOn(_ name: String) -> Bool {
         UserDefaults.standard.bool(forKey: "core.\(name)")
     }
 
+    /// The values the core sees for this process (read at first use, then kept)
+    static func freeze() {
+        if frozen == nil { frozen = Dictionary(uniqueKeysWithValues: names.map { ($0, isOn($0)) }) }
+    }
+
     static func all() -> [String: Bool] {
-        Dictionary(uniqueKeysWithValues: names.map { ($0, isOn($0)) })
+        freeze()
+        return frozen ?? [:]
     }
 }
 
@@ -301,7 +313,7 @@ enum CoreConnectors {
     static func registerDefaults() {
         let host = CoreHost.shared
         host.register("http", HttpConnector())
-        host.register("store", StoreConnector())
+        host.register("store", StoreConnector.shared)
         host.register("secure", SecureConnector())
         host.register("system", SystemConnector())
         host.register("timer", TimerConnector())

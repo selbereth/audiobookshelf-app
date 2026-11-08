@@ -34,6 +34,7 @@ final class CoreHost {
 
     /// Loads the core once. Safe to call again.
     func start() {
+        CoreSwitch.freeze()
         queue.async {
             if self.started { return }
             self.started = true
@@ -208,6 +209,13 @@ final class CoreHost {
     static func parseAny(_ text: String) -> Any? {
         guard let data = text.data(using: .utf8) else { return nil }
         return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+    }
+
+    /// {"ok": ok, ...extra} as JSON
+    static func json(ok: Bool, extra: [String: Any]) -> String {
+        var o = extra
+        o["ok"] = ok
+        return json(o)
     }
 
     static func parse(_ text: String) -> [String: Any] {
