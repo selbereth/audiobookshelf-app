@@ -93,6 +93,19 @@ class CoreDebugReceiver : BroadcastReceiver() {
       "cors" -> CoreHost.callUp("core", "httpTest", JSONObject().put("url", intent.getStringExtra("url") ?: ""), 20000) { _, _ -> }
       // Native event into the core, as the app would send it: --es connector player --es event mediaKey --es data '{...}'
       "emit" -> CoreHost.emit(intent.getStringExtra("connector") ?: "", intent.getStringExtra("event") ?: "", JSONObject(intent.getStringExtra("data") ?: "{}"))
+      // Playback test hook (debug only): loads the server session JSON in /data/local/tmp/abs-session.json through the same
+      // native entry the core uses (PlayerConnector.loadSession). --ef rate (default 1.0) sets the speed.
+      "loadSessionFile" -> {
+        val text = java.io.File("/data/local/tmp/abs-session.json").readText()
+        val args = JSONObject().put("session", JSONObject(text)).put("playbackRate", intent.getFloatExtra("rate", 1f).toDouble())
+        com.audiobookshelf.app.core.PlayerConnector.call("loadSession", args) { ok, json -> Log.i("CoreDebug", "loadSession ok=$ok $json") }
+      }
+      // Native player command for the test: --es method pause|play|pauseService|playService|playPause, --ei ms (seekBackward)
+      "playerCall" -> {
+        val m = intent.getStringExtra("method") ?: ""
+        val args = JSONObject().put("ms", intent.getIntExtra("ms", 0).toLong())
+        com.audiobookshelf.app.core.PlayerConnector.call(m, args) { ok, json -> Log.i("CoreDebug", "player.$m ok=$ok $json") }
+      }
       // Reads the switches as the core sees them (the native answer to system.flags)
       "flags" -> com.audiobookshelf.app.core.SystemConnector(app).call("flags", JSONObject()) { ok, json -> Log.i("CoreDebug", "flags ok=$ok $json") }
       "ping" -> {
