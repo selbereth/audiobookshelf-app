@@ -91,6 +91,8 @@ class CoreDebugReceiver : BroadcastReceiver() {
       "crash" -> CoreHost.crashForTest()
       "timers" -> CoreHost.callUp("core", "timerTest", JSONObject().put("sleepMs", intent.getIntExtra("sleepMs", 60000)).put("durationMs", intent.getIntExtra("durationMs", 300000)), 5000) { _, _ -> }
       "cors" -> CoreHost.callUp("core", "httpTest", JSONObject().put("url", intent.getStringExtra("url") ?: ""), 20000) { _, _ -> }
+      // Native event into the core, as the app would send it: --es connector player --es event mediaKey --es data '{...}'
+      "emit" -> CoreHost.emit(intent.getStringExtra("connector") ?: "", intent.getStringExtra("event") ?: "", JSONObject(intent.getStringExtra("data") ?: "{}"))
       // Reads the switches as the core sees them (the native answer to system.flags)
       "flags" -> com.audiobookshelf.app.core.SystemConnector(app).call("flags", JSONObject()) { ok, json -> Log.i("CoreDebug", "flags ok=$ok $json") }
       "ping" -> {
