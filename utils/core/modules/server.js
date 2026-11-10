@@ -13,7 +13,7 @@ export function serverModule(bridge, { api }) {
   const server = (a) => ({ address: a.address, token: a.token, serverConnectionConfigId: a.serverConnectionConfigId })
 
   async function ping(a) {
-    const r = await api.request({ method: 'GET', endpoint: '/ping', timeoutMs: PING_TIMEOUT, ...server(a) })
+    const r = await api.request({ method: 'GET', endpoint: '/ping', timeoutMs: PING_TIMEOUT, anonymous: true, ...server(a) })
     return { reachable: !r.error && !!r.success }
   }
 

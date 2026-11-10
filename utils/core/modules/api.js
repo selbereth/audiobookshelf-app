@@ -13,7 +13,9 @@ export function apiModule(bridge, { log = console.log, db }) {
   /** {ok, status, body} or null when the server could not be reached */
   async function send({ method, url, token, body, timeoutMs }) {
     try {
-      const r = await bridge.call('http', 'request', { method, url, headers: { Authorization: 'Bearer ' + token }, body, timeoutMs })
+      // No Authorization header without a token (an empty bearer is never sent); anonymous endpoints such as /ping need none
+      const headers = token ? { Authorization: 'Bearer ' + token } : {}
+      const r = await bridge.call('http', 'request', { method, url, headers, body, timeoutMs })
       return { status: r.status, ok: r.status >= 200 && r.status < 300, body: r.body }
     } catch (e) {
       log('api: ' + method + ' ' + url + ' failed: ' + (e && e.message))
@@ -47,10 +49,11 @@ export function apiModule(bridge, { log = console.log, db }) {
     return { address: config.address, token: config.token, serverConnectionConfigId: config.id }
   }
 
-  async function request({ method = 'GET', endpoint, payload, timeoutMs = DEFAULT_TIMEOUT, ...named }) {
+  async function request({ method = 'GET', endpoint, payload, timeoutMs = DEFAULT_TIMEOUT, anonymous = false, ...named }) {
     const srv = await resolveServer(named)
     if (!srv) return { error: 'No server connection' }
     const { address, token, serverConnectionConfigId } = srv
+    if (!token && !anonymous) return { error: 'No access token for this server' }
     const url = address + endpoint
     const body = payload === undefined || payload === null ? null : JSON.stringify(payload)
     let r = await send({ method, url, token, body, timeoutMs })

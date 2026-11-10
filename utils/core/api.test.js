@@ -52,6 +52,17 @@ const tests = {
     mode = 'bad'
     assert.deepStrictEqual(await t.api.request(req), { error: 'Invalid response body' })
   },
+  async 'no access token: nothing is sent, a clear error is answered'() {
+    const t = setup(() => ok({}))
+    assert.deepStrictEqual(await t.api.request({ ...req, token: '' }), { error: 'No access token for this server' })
+    assert.deepStrictEqual(await t.api.request({ ...req, token: undefined }), { error: 'No access token for this server' })
+    assert.strictEqual(t.requests.length, 0, 'no request was sent')
+  },
+  async 'anonymous call (ping): sent with no Authorization header at all, not an empty bearer'() {
+    const t = setup(() => ok({ success: true }))
+    assert.deepStrictEqual(await t.api.request({ method: 'GET', endpoint: '/ping', address: 'https://s', token: '', anonymous: true }), { success: true })
+    assert.strictEqual('Authorization' in t.requests[0].headers, false)
+  },
   async 'POST sends the payload as JSON'() {
     const t = setup(() => ok({}))
     await t.api.request({ ...req, method: 'POST', payload: { a: 1 } })
