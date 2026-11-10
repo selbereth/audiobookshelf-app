@@ -99,6 +99,12 @@ class CoreDebugReceiver : BroadcastReceiver() {
         val dm = com.audiobookshelf.app.device.DeviceManager
         Log.i("CoreDebug", "kotlinView settings.jumpForwardTime=${dm.deviceData.deviceSettings?.jumpForwardTime} configs=${dm.deviceData.serverConnectionConfigs.size} current=${dm.serverConnectionConfig?.id?.take(8)} items=${dm.dbManager.getLocalLibraryItems().size} progress=${dm.dbManager.getAllLocalMediaProgress().size} (${System.currentTimeMillis() - t0} ms)")
       }.start()
+      // Debug logs: the directory, each file and the total, to logcat (tag DebugLog). Never throws: a bad call must not crash the app
+      "logs" -> try {
+        com.audiobookshelf.app.debug.DebugLog.describe(app)
+      } catch (e: Exception) {
+        Log.e("DebugLog", "logs failed: ${e.message}")
+      }
       "stop" -> CoreHost.stop()
       "crash" -> CoreHost.crashForTest()
       "timers" -> CoreHost.callUp("core", "timerTest", JSONObject().put("sleepMs", intent.getIntExtra("sleepMs", 60000)).put("durationMs", intent.getIntExtra("durationMs", 300000)), 5000) { _, _ -> }
