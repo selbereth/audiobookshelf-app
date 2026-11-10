@@ -467,6 +467,8 @@ export default {
     this.onCoreRemove = await onCore((event, data) => {
       if (event === 'sleepTimerSet') this.onSleepTimerSet(data)
       else if (event === 'sleepTimerEnded') this.onSleepTimerEnded(data)
+      // The core saves the local progress while playing (saver.js) and sends it here, as the native event above
+      else if (event === 'onLocalMediaProgressUpdate') this.onLocalMediaProgressUpdate(data)
     })
     this.onMediaPlayerChangedListener = await AbsAudioPlayer.addListener('onMediaPlayerChanged', this.onMediaPlayerChanged)
 
