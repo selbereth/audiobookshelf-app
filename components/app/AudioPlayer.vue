@@ -157,7 +157,7 @@
 
 <script>
 import { Capacitor } from '@capacitor/core'
-import { AbsAudioPlayer } from '@/plugins/capacitor'
+import { AbsAudioPlayer, onCore } from '@/plugins/capacitor'
 import { Dialog } from '@capacitor/dialog'
 import { getAverageColorFromCoverUrl } from '@/utils/coverAverageColor'
 import WrappingMarquee from '@/assets/WrappingMarquee.js'
@@ -1047,6 +1047,12 @@ export default {
       AbsAudioPlayer.addListener('onMetadata', this.onMetadata)
       AbsAudioPlayer.addListener('onProgressSyncFailing', this.showProgressSyncIsFailing)
       AbsAudioPlayer.addListener('onProgressSyncSuccess', this.showProgressSyncSuccess)
+      // The JS core sends the same two alerts as progressSync {kind: 'success' | 'failing'} (utils/core/modules/saver.js)
+      this.onCoreRemove = await onCore((event, data) => {
+        if (event !== 'progressSync') return
+        if (data?.kind === 'failing') this.showProgressSyncIsFailing()
+        else if (data?.kind === 'success') this.showProgressSyncSuccess()
+      })
       AbsAudioPlayer.addListener('onPlaybackSpeedChanged', this.onPlaybackSpeedChanged)
     },
     async screenOrientationChange() {
@@ -1139,6 +1145,7 @@ export default {
     this.$nextTick(this.init)
   },
   beforeDestroy() {
+    this.onCoreRemove?.()
     if (screen.orientation) {
       // Not available on ios
       screen.orientation.removeEventListener('change', this.screenOrientationChange)
