@@ -61,6 +61,8 @@ export function apiModule(bridge, { log = console.log, db }) {
     if (r.status === 401) {
       log('api: 401 for ' + url + ' - attempting token refresh')
       const refreshed = serverConnectionConfigId ? await refreshAuthTokens({ serverConnectionConfigId }) : { result: 'rejected' }
+      // transient: the refresh could not be completed (unreachable, 5xx): the login is kept, so do not ask for a new one
+      if (refreshed.result === 'transient') return { error: 'Could not refresh the login - try again' }
       if (refreshed.result !== 'success') return { error: 'Authentication failed - login again' }
       r = await send({ method, url, token: refreshed.accessToken, body, timeoutMs })
       if (!r) return { error: 'Failed to retry request after token refresh' }

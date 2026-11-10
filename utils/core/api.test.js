@@ -98,9 +98,9 @@ const tests = {
     assert.strictEqual(t.ui[0][0], 'onTokenRefreshFailure')
     assert.strictEqual(t.ui[0][1].serverConnectionConfigId, 'c1')
   },
-  async 'refresh transient (500 or unreachable): nothing cleared'() {
+  async 'refresh transient (500 or unreachable): nothing cleared, the user is not asked to log in again'() {
     const t = setup((a) => (a.url.endsWith('/auth/refresh') ? { status: 503, headers: {}, body: '' } : { status: 401, headers: {}, body: '' }))
-    assert.deepStrictEqual(await t.api.request(req), { error: 'Authentication failed - login again' })
+    assert.deepStrictEqual(await t.api.request(req), { error: 'Could not refresh the login - try again' })
     assert.strictEqual(t.secure.c1, 'r1')
     assert.strictEqual(t.device().lastServerConnectionConfigId, 'c1')
     assert.deepStrictEqual(t.ui, [])
