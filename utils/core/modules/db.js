@@ -4,7 +4,7 @@
  * arguments and results the AbsDatabase plugin had. Native code that has not moved yet reads the same rows (DbManager).
  *
  * Reads go to the store every time (no copy kept here), writes are serialised, so Kotlin and JS never work from stale data.
- * "Not found" answers {} like the plugin's call.resolve() did.
+ * "Not found" answers nothing (undefined) like the plugin's call.resolve() did: the UI tests the answer for truthiness.
  */
 import * as rules from './dbRules'
 
@@ -137,7 +137,7 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
 
   define('getRefreshToken', async ({ serverConnectionConfigId }) => {
     const r = await bridge.call('secure', 'get', { key: serverConnectionConfigId })
-    return r && r.value ? { refreshToken: r.value } : {}
+    return r && r.value ? { refreshToken: r.value } : undefined
   })
 
   define('clearRefreshToken', async ({ serverConnectionConfigId }) => {
@@ -193,9 +193,9 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
 
   // ---- local folders and library items
   define('getLocalFolders', async () => ({ value: await store.list(C.localFolders) }))
-  define('getLocalFolder', async ({ folderId }) => (await store.get(C.localFolders, folderId)) || {})
-  define('getLocalLibraryItem', async ({ id }) => (await store.get(C.localLibraryItems, id)) || {})
-  define('getLocalLibraryItemByLId', async ({ libraryItemId }) => (await store.list(C.localLibraryItems)).find((i) => i.libraryItemId === libraryItemId) || {})
+  define('getLocalFolder', async ({ folderId }) => (await store.get(C.localFolders, folderId)) || undefined)
+  define('getLocalLibraryItem', async ({ id }) => (await store.get(C.localLibraryItems, id)) || undefined)
+  define('getLocalLibraryItemByLId', async ({ libraryItemId }) => (await store.list(C.localLibraryItems)).find((i) => i.libraryItemId === libraryItemId) || undefined)
   define('getLocalLibraryItems', async ({ mediaType }) => {
     const all = await store.list(C.localLibraryItems)
     return { value: mediaType ? all.filter((i) => i.mediaType === mediaType) : all }
@@ -204,9 +204,10 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
 
   define('updateLocalTrackOrder', async ({ localLibraryItemId, tracks }) => {
     const item = await store.get(C.localLibraryItems, localLibraryItemId || '')
-    if (!item) return {}
+    // Native resolved nothing both for a missing item and for an order that did not change (AbsDatabase.kt updateLocalTrackOrder): so do we
+    if (!item) return undefined
     const { changed } = rules.reorderTracks(item, tracks || [])
-    if (!changed) return {}
+    if (!changed) return undefined
     await store.put(C.localLibraryItems, item.id, item)
     return item
   }, { write: true })
@@ -216,12 +217,12 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
 
   define('getLocalMediaProgressForServerItem', async ({ libraryItemId, episodeId }) => {
     const ep = nonEmpty(episodeId)
-    return (await store.list(C.localMediaProgress)).find((p) => libraryItemId === p.libraryItemId && (ep === null || p.episodeId === ep)) || {}
+    return (await store.list(C.localMediaProgress)).find((p) => libraryItemId === p.libraryItemId && (ep === null || p.episodeId === ep)) || undefined
   })
 
   define('removeLocalMediaProgress', async ({ localMediaProgressId }) => {
     await store.delete(C.localMediaProgress, localMediaProgressId)
-    return {}
+    return undefined
   }, { write: true })
 
   define('updateLocalEbookProgress', async ({ localLibraryItemId, ebookLocation, ebookProgress }) => {
@@ -278,7 +279,7 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
       const item = await store.get(C.localLibraryItems, localLibraryItemId || '')
       if (!item) {
         log('db: syncServerMediaProgress: local library item not found')
-        return {}
+        return undefined
       }
       const progress = rules.newLocalMediaProgress(item, {
         id: rules.localMediaProgressId(localLibraryItemId, episode),
@@ -300,7 +301,7 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
     const existing = await store.get(C.localMediaProgress, localMediaProgressId)
     if (!existing) {
       log('db: syncServerMediaProgress: local media progress not found ' + localMediaProgressId)
-      return {}
+      return undefined
     }
     await addSyncEvent(mediaProgress, 'Received from webhook event')
     const updated = rules.applyServerProgress(existing, mediaProgress)
@@ -338,7 +339,7 @@ export function dbModule(bridge, { log = console.log, now = () => Date.now(), em
     emitToUi('onMediaItemHistoryUpdated', history)
   }
 
-  define('getMediaItemHistory', async ({ mediaId }) => (await store.get(C.mediaItemHistory, mediaId || '')) || {})
+  define('getMediaItemHistory', async ({ mediaId }) => (await store.get(C.mediaItemHistory, mediaId || '')) || undefined)
 
   // ---- startup and cleanup
   /** Core start: apply defaults for settings an older version did not have, then tell Kotlin to take the new copy */

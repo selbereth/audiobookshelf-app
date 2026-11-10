@@ -115,21 +115,33 @@ const tests = {
     assert.strictEqual(out.deviceSettings.languageCode, 'en-us')
     assert.deepStrictEqual(t.deviceCalls, [{ settingsChanged: true }])
   },
-  async 'local items: lookups, "not found" is {}'() {
+  async 'local items: lookups'() {
     const t = setup()
     t.put('localLibraryItems', 'l1', book('l1'))
     t.put('localLibraryItems', 'l2', { ...book('l2'), mediaType: 'podcast', media: { episodes: [] } })
     assert.strictEqual((await t.call('getLocalLibraryItems', {})).value.length, 2)
     assert.strictEqual((await t.call('getLocalLibraryItems', { mediaType: 'podcast' })).value.length, 1)
     assert.strictEqual((await t.call('getLocalLibraryItem', { id: 'l1' })).id, 'l1')
-    assert.deepStrictEqual(await t.call('getLocalLibraryItem', { id: 'nope' }), {})
     assert.strictEqual((await t.call('getLocalLibraryItemByLId', { libraryItemId: 'li-l2' })).id, 'l2')
     assert.strictEqual((await t.call('getLocalLibraryItemsInFolder', { folderId: 'f1' })).value.length, 2)
+  },
+  async 'not found answers nothing (undefined), as the native plugin call.resolve() did, never {}'() {
+    const t = setup()
+    t.put('localLibraryItems', 'l1', book('l1'))
+    t.put('localFolders', 'f1', { id: 'f1', name: 'Folder' })
+    assert.strictEqual(await t.call('getLocalFolder', { folderId: 'nope' }), undefined)
+    assert.strictEqual(await t.call('getLocalLibraryItem', { id: 'nope' }), undefined)
+    assert.strictEqual(await t.call('getLocalLibraryItemByLId', { libraryItemId: 'li-nope' }), undefined)
+    assert.strictEqual(await t.call('getMediaItemHistory', { mediaId: 'li-nope' }), undefined)
+    assert.strictEqual(await t.call('getLocalMediaProgressForServerItem', { libraryItemId: 'li-nope', episodeId: '' }), undefined)
+    assert.strictEqual(await t.call('getRefreshToken', { serverConnectionConfigId: 'nope' }), undefined)
+    assert.strictEqual(await t.call('removeLocalMediaProgress', { localMediaProgressId: 'nope' }), undefined)
+    assert.strictEqual((await t.call('getLocalFolder', { folderId: 'f1' })).name, 'Folder')
   },
   async 'track order: renumbered from 1 in the order given, saved only on change'() {
     const t = setup()
     t.put('localLibraryItems', 'l1', book('l1'))
-    assert.deepStrictEqual(await t.call('updateLocalTrackOrder', { localLibraryItemId: 'l1', tracks: [{ localFileId: 'l1a' }, { localFileId: 'l1b' }] }), {})
+    assert.strictEqual(await t.call('updateLocalTrackOrder', { localLibraryItemId: 'l1', tracks: [{ localFileId: 'l1a' }, { localFileId: 'l1b' }] }), undefined)
     const out = await t.call('updateLocalTrackOrder', { localLibraryItemId: 'l1', tracks: [{ localFileId: 'l1b' }, { localFileId: 'l1a' }] })
     assert.deepStrictEqual(out.media.tracks.map((x) => [x.localFileId, x.index]), [['l1a', 2], ['l1b', 1]])
     assert.strictEqual(t.get('localLibraryItems', 'l1').media.tracks[0].index, 2)
@@ -175,7 +187,8 @@ const tests = {
     const t = setup()
     t.put('localLibraryItems', 'l1', book('l1'))
     const server = { libraryItemId: 'li-l1', duration: 100, progress: 0.5, currentTime: 50, isFinished: false, ebookLocation: null, ebookProgress: null, lastUpdate: 5, startedAt: 1, finishedAt: null, episodeId: null }
-    assert.deepStrictEqual(await t.call('syncServerMediaProgressWithLocalMediaProgress', { mediaProgress: server, localLibraryItemId: 'nope' }), {})
+    assert.strictEqual(await t.call('syncServerMediaProgressWithLocalMediaProgress', { mediaProgress: server, localLibraryItemId: 'nope' }), undefined)
+    assert.strictEqual(await t.call('syncServerMediaProgressWithLocalMediaProgress', { mediaProgress: server, localMediaProgressId: 'nope' }), undefined)
     const created = await t.call('syncServerMediaProgressWithLocalMediaProgress', { mediaProgress: server, localLibraryItemId: 'l1' })
     assert.strictEqual(created.id, 'l1')
     assert.strictEqual(created.currentTime, 50)
@@ -195,7 +208,7 @@ const tests = {
     t.put('localMediaProgress', 'local_b-e1', { id: 'local_b-e1', libraryItemId: 'li2', episodeId: 'e1' })
     assert.strictEqual((await t.call('getLocalMediaProgressForServerItem', { libraryItemId: 'li', episodeId: '' })).id, 'local_a')
     assert.strictEqual((await t.call('getLocalMediaProgressForServerItem', { libraryItemId: 'li2', episodeId: 'e1' })).id, 'local_b-e1')
-    assert.deepStrictEqual(await t.call('getLocalMediaProgressForServerItem', { libraryItemId: 'li2', episodeId: 'e9' }), {})
+    assert.strictEqual(await t.call('getLocalMediaProgressForServerItem', { libraryItemId: 'li2', episodeId: 'e9' }), undefined)
   },
   async 'cleanup: stale progress, missing files, local-only items and old logs'() {
     const t = setup({ existing: { '/x/b.mp3': false, 'content://a': true, 'file:///b': true } })
