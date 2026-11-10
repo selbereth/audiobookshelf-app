@@ -187,6 +187,15 @@ const tests = {
     assert.deepStrictEqual(last(w).data, { remainingMs: 0, running: false, atChapterEnd: false }, 'cancel always notifies')
   },
 
+  // utils/tts/ttsSession.js listens for this exact name (Capacitor.onCore) to show the read-aloud sleep timer
+  'the sleep state reaches the UI as the ttsSleepTimer event that ttsSession listens for': async () => {
+    const w = world()
+    await w.serve('set', { target: 'tts', ms: 60000, isChapterTime: false })
+    assert.strictEqual(last(w).event, 'ttsSleepTimer')
+    await w.serve('cancel', { target: 'tts' })
+    assert.strictEqual(last(w).event, 'ttsSleepTimer')
+  },
+
   'a fixed timer clears a chapter sleep, and a chapter sleep clears the fixed timer (cancelSleepTimer notify=false)': async () => {
     quote(SVC, 215, 'cancelSleepTimer(notify = false)')
     const w = world()
