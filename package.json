@@ -7,11 +7,15 @@
     "build": "nuxt build",
     "start": "nuxt --hostname 0.0.0.0 --port 1337",
     "generate": "nuxt generate",
-    "sync": "npm run build:tts-headless && nuxt generate && npx cap sync",
+    "sync": "npm run build:tts-headless && npm run build:pebble-hub && npm run build:core && nuxt generate && npm run build:core-ios && npx cap sync",
     "icons-android": "cordova-res android --skip-config --copy",
     "ionic:build": "npm run build",
     "ionic:serve": "npm run dev",
     "devlive": "ionic cap run -l --external --port=1337",
+    "build:core": "esbuild utils/core/entry.js --bundle --minify --target=chrome100 --outfile=android/app/src/main/assets/core/bundle.js && cp utils/core/index.html android/app/src/main/assets/core/index.html",
+    "test:core": "node utils/core/run-tests.mjs",
+    "build:core-ios": "mkdir -p dist/core-ios && esbuild utils/core/entry.js --bundle --minify --target=safari15 --outfile=dist/core-ios/bundle.js",
+    "build:pebble-hub": "esbuild utils/pebble/entry.js --bundle --minify --target=chrome100 --outfile=android/app/src/main/assets/pebble-hub/bundle.js && cp utils/pebble/index.html android/app/src/main/assets/pebble-hub/index.html",
     "build:tts-headless": "esbuild utils/tts/headless/entry.js --bundle --minify --target=chrome100 --define:process.env.NODE_ENV='\"production\"' --alias:@/plugins/capacitor=./utils/tts/headless/capacitor-shim.js --alias:@=. --outfile=android/app/src/main/assets/tts-headless/bundle.js && cp utils/tts/headless/index.html android/app/src/main/assets/tts-headless/index.html"
   },
   "dependencies": {

@@ -115,12 +115,6 @@
               </div>
               <ui-toggle-btns v-model="ereaderSettings.navigateWithVolumeWhilePlaying" name="navigate-volume-playing" :items="onOffToggleButtonItems" @input="settingsUpdated" />
             </div>
-            <div class="flex items-center mb-6">
-              <div class="w-32">
-                <p class="text-sm">{{ $strings.LabelKeepScreenAwake }}</p>
-              </div>
-              <ui-toggle-btns v-model="ereaderSettings.keepScreenAwake" name="keep-awake" :items="onOffToggleButtonItems" @input="settingsUpdated" />
-            </div>
           </div>
         </div>
       </div>
@@ -156,8 +150,7 @@ export default {
         spread: 'auto',
         textStroke: 0,
         navigateWithVolume: 'enabled',
-        navigateWithVolumeWhilePlaying: false,
-        keepScreenAwake: false
+        navigateWithVolumeWhilePlaying: false
       }
     }
   },
@@ -531,15 +524,11 @@ export default {
 
       this.isInittingWatchVolume = false
     },
+    /** The screen stays on while a book is open: reading does not touch the screen for long stretches */
     async initKeepScreenAwake() {
       try {
-        if (this.ereaderSettings.keepScreenAwake) {
-          await KeepAwake.keepAwake()
-          console.log('Reader keep screen awake enabled')
-        } else {
-          await KeepAwake.allowSleep()
-          console.log('Reader keep screen awake disabled')
-        }
+        await KeepAwake.keepAwake()
+        console.log('Reader keep screen awake enabled')
       } catch (error) {
         console.error('Failed to init keep screen awake', error)
       }

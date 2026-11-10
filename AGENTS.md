@@ -86,10 +86,23 @@ $A -s <device> shell am start -n com.selbereth.audiobookshelf.debug/com.audioboo
 ## Pebble watch app (phone side)
 
 The watchapp itself is a **separate repo**, `/Users/samuelthompson/projects/selbershelf-pebble` (its own `AGENTS.md` has the build,
-emulator and Core-app pairing recipes). This repo holds only the phone side, `android/app/src/main/java/com/audiobookshelf/app/pebble/`
-(`PebbleListenerService`, `PebbleController`, `PebbleProtocol`) and a debug-only `PebbleDebugReceiver` in `android/app/src/debug/`.
-Change both repos together for anything that crosses the line: the UUID, message keys, command and state numbers, and the app ids
-(see the sync list in the watchapp repo).
+emulator and Core-app pairing recipes). This repo holds only the phone side.
+
+**All the logic is JavaScript, shared with iOS: `utils/pebble/hub.js`** (with `protocol.js`, the keys, commands and states). It decides which
+way of playing (audiobook or EPUB read aloud) the watch steers, keeps the other quiet, builds the shelves (the home screen's, plus the
+downloads), pages the lists and builds every message. It is tested without a device: `npx esbuild utils/pebble/hub.test.js --bundle
+--platform=node --outfile=$TMPDIR/t.js && node $TMPDIR/t.js`. **Native code only supplies primitives and moves messages**: the list of
+primitives (`audio.*`, `tts.*`, `device.*`, `api.get`, `local.*`, `pebble.send`) and what each returns is at the top of `hub.js`; an iOS
+version implements the same list. Do not put a decision in Kotlin or Swift.
+
+- Android: `android/app/src/main/java/com/audiobookshelf/app/pebble/`. `PebbleListenerService` is the transport (message in as JSON, `send` out
+  in the watch's format). `PebbleHost` runs the hub in a hidden WebView (`utils/pebble/entry.js`, bundled by `npm run build:pebble-hub`
+  into `assets/pebble-hub`, part of `npm run sync`) so it works with the app's screen closed. `PebblePrimitives` is the list of primitives
+  (`AudioPrimitives`, `TtsPrimitives` do the work). `QuickPlayActivity` and the debug receiver call the hub through `PebbleHost.call`.
+- The speed has one owner per way of playing, and both save it and tell the app's screen: `PlayerNotificationService.setPlaybackSpeed`
+  and `TtsController.changeRate`.
+- Change both repos together for anything that crosses the line: the UUID, message keys, command and state numbers (`protocol.js` here), and
+  the app ids (see the sync list in the watchapp repo).
 
 - It uses PebbleKit Android 2: the Core Devices Pebble app binds to `PebbleListenerService` (declared with the action
   `io.rebble.pebblekit2.RECEIVE_DATA_FROM_WATCH`) when the watchapp opens, which starts this app's process when it is closed. The
@@ -99,14 +112,34 @@ Change both repos together for anything that crosses the line: the UUID, message
   Gradle plugin for this: it would conflict with the other branches.
 - The Core app delivers numbers from the watch as `UInt32`, whatever the watch wrote. The listener accepts any integer type: an earlier
   strict `UByte` check silently refused every command.
-- The app's screen sets `DeviceManager.serverConnectionConfig`; started from the watch there is no screen, so `PebbleController` loads the
-  saved one before asking the server to play a book that is not downloaded.
-- Try the phone side without a watch (debug builds): `adb shell am broadcast -n com.selbereth.audiobookshelf.debug/com.audiobookshelf.app.pebble.PebbleDebugReceiver --ei command <0..5>`
-  (0 status, 1 play or pause and start the most recent book, 2 skip ahead, 3 skip back, 4 volume up, 5 volume down) and read logcat tag `PebbleDebug`.
+- The app's screen sets `DeviceManager.serverConnectionConfig`; started from the watch there is no screen, so the primitives (`AudioPrimitives`, `api.get`) load the
+  saved one before asking the server for anything.
+- Try the phone side without a watch (debug builds): `adb shell am broadcast -n com.selbereth.audiobookshelf.debug/com.audiobookshelf.app.pebble.PebbleDebugReceiver --ei command <0..9>`
+  (0 status, 1 play or pause and start the most recent book, 2 skip ahead, 3 skip back, 4 volume up, 5 volume down, 6 speed up, 7 speed down,
+  8 browse with `--ei level --ei shelf --ei item`, 9 start a book with `--ei shelf --ei item --ei format`, 255 = ask). The messages it would send
+  to the watch are in logcat: `adb logcat -d | grep "Not connected to the Pebble app"` (key numbers are in `protocol.js`).
   Starting from a stopped app only works after
   `adb shell dumpsys deviceidle whitelist +com.selbereth.audiobookshelf.debug` (the same as setting battery usage to Unrestricted).
 - A sibling project, `~/projects/find-pebble`, is a find-my-phone Pebble app. It uses the classic PebbleKit broadcast and is a useful
   reference for the Core Devices app's behaviour (vault note `find-pebble`).
+
+## JS core (Android, refactor in progress)
+
+All app logic is moving into one JS core that runs in a hidden web view (`android/.../core/CoreHost.kt`, page `utils/core/`, built by
+`npm run build:core`, part of `npm run sync`). The core is plain JS (no DOM, Vue or Vuex) and is tested in Node with a fake bridge:
+`npm run test:core`. **Native code is connectors only** (`core/*Connector.kt`): it calls the Android API and turns the result into
+JSON, it never chooses, retries, merges, schedules, counts or works out times. Do not add an app decision to Kotlin.
+
+- Bridge (`utils/core/bridge.js`): `native.call(connector, method, args)` down; `native.on(connector, event, handler)` up, each event
+  stamped with the time it happened; `bridge.serve(connector, method, fn)` for calls up that native waits for (with a timeout).
+  Native queues events while the core starts or restarts and replays them in order.
+- Connectors so far: `http` (all server calls: the page cannot use `fetch`, CORS), `wake` (alarms), `system`, `ui` (to the visible UI).
+  The visible UI is a client: `callCore(method, args)` and `onCore(handler)` in `plugins/capacitor/AbsCore.js`. iOS still uses its native code.
+- The core's web view shares the UI web view's renderer process. Chromium kills the app if either web view does not handle a crashed
+  renderer, so `MainActivity` handles it for the UI and `CoreHost` for the core. Keep both.
+- A process with no foreground state has no network: start the foreground service before the core calls the server.
+- Debug builds: `adb shell am broadcast -n <pkg>/com.audiobookshelf.app.core.CoreDebugReceiver --es action start|stop|ping|timers|cors|crash`.
+- Do not symlink `node_modules` into a worktree (Nuxt writes its cache there): clone it with `cp -Rc`.
 
 ## Working style for this repo
 

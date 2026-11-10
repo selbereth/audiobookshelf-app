@@ -11,6 +11,9 @@ class AbsTtsWeb extends WebPlugin {
   async seekToSentence() {}
   async reset() {}
   async setRate() {}
+  async getRate() {
+    return { rate: 0 }
+  }
   async setPitch() {}
   async setVoice() {}
   async setSleepTimer() {}

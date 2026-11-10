@@ -1,4 +1,5 @@
 import { registerPlugin, Capacitor, WebPlugin } from '@capacitor/core'
+import { callCore, onCore } from './AbsCore'
 
 /**
  * @typedef {Object} ServerConnectionConfig
@@ -393,8 +394,42 @@ class AbsDatabaseWeb extends WebPlugin {
   }
 }
 
-const AbsDatabase = registerPlugin('AbsDatabase', {
+const AbsDatabasePlugin = registerPlugin('AbsDatabase', {
   web: () => new AbsDatabaseWeb()
 })
+
+/**
+ * On Android the database is in the JS core (utils/core/modules/db.js): these calls go there with the same arguments and results
+ * the native plugin had. `updateLocalMediaProgressFinished` is the core's progress module (it also calls the server).
+ * `syncLocalSessionsWithServer` is in the core's sync module. The token events come from the core. iOS keeps the native plugin.
+ */
+const coreMethods = new Set([
+  'getDeviceData', 'getLocalFolders', 'getLocalFolder', 'getLocalLibraryItem', 'getLocalLibraryItemByLId', 'getLocalLibraryItems',
+  'getLocalLibraryItemsInFolder', 'setCurrentServerConnectionConfig', 'removeServerConnectionConfig', 'getRefreshToken',
+  'clearRefreshToken', 'getAccessToken', 'logout', 'getAllLocalMediaProgress', 'getLocalMediaProgressForServerItem',
+  'removeLocalMediaProgress', 'syncServerMediaProgressWithLocalMediaProgress', 'updateLocalEbookProgress', 'updateLocalTrackOrder',
+  'updateDeviceSettings', 'getMediaItemHistory'
+])
+
+const coreEvents = new Set(['onTokenRefresh', 'onTokenRefreshFailure'])
+
+const AbsDatabase =
+  Capacitor.getPlatform() === 'android'
+    ? new Proxy(AbsDatabasePlugin, {
+        get(target, prop) {
+          if (coreMethods.has(prop)) return (args) => callCore('db.' + prop, args || {}, 30000)
+          if (prop === 'syncLocalSessionsWithServer') return (args) => callCore('sync.syncLocalSessionsWithServer', args || {}, 120000)
+          if (prop === 'updateLocalMediaProgressFinished') return (args) => callCore('progress.updateLocalFinished', args || {}, 150000)
+          // The token events now come from the core (api.js) as core events, not from the native plugin
+          if (prop === 'addListener')
+            return (name, handler) => {
+              if (!coreEvents.has(name)) return target.addListener(name, handler)
+              const off = onCore((event, data) => event === name && handler(data))
+              return off.then((fn) => ({ remove: fn }))
+            }
+          return target[prop]
+        }
+      })
+    : AbsDatabasePlugin
 
 export { AbsDatabase }

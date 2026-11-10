@@ -2,14 +2,14 @@
   <div>
     <app-audio-player ref="audioPlayer" :bookmarks="bookmarks" :sleep-timer-running="sleepRunning" :sleep-time-remaining="sleepRemaining" :serverLibraryItemId="serverLibraryItemId" @selectPlaybackSpeed="openPlaybackSpeed" @updateTime="(t) => (currentTime = t)" @showSleepTimer="showSleepTimer" @showBookmarks="showBookmarks" />
 
-    <modals-playback-speed-modal v-model="showPlaybackSpeedModal" :playback-rate.sync="playbackSpeed" @update:playbackRate="updatePlaybackSpeed" @change="changePlaybackSpeed" />
+    <modals-playback-speed-modal v-model="showPlaybackSpeedModal" :playback-rate.sync="playbackSpeed" :min-speed="isTts ? 0.1 : 0.5" @update:playbackRate="updatePlaybackSpeed" @change="changePlaybackSpeed" />
     <modals-sleep-timer-modal v-model="showSleepTimerModal" :current-time="sleepRemaining" :sleep-timer-running="sleepRunning" :current-end-of-chapter-time="currentEndOfChapterTime" :is-auto="isAutoSleepTimer && !isTts" @change="selectSleepTimeout" @cancel="cancelSleepTimer" @increase="increaseSleepTimer" @decrease="decreaseSleepTimer" />
     <modals-bookmarks-modal v-model="showBookmarksModal" :bookmarks="bookmarks" :current-time="currentTime" :library-item-id="serverLibraryItemId" :playback-rate="playbackSpeed" @select="selectBookmark" />
   </div>
 </template>
 
 <script>
-import { AbsAudioPlayer, AbsLogger } from '@/plugins/capacitor'
+import { AbsAudioPlayer, AbsLogger, onCore } from '@/plugins/capacitor'
 import { Dialog } from '@capacitor/dialog'
 import CellularPermissionHelpers from '@/mixins/cellularPermissionHelpers'
 import ttsSession from '@/utils/tts/ttsSession'
@@ -34,6 +34,7 @@ export default {
       onLocalMediaProgressUpdateListener: null,
       onSleepTimerEndedListener: null,
       onSleepTimerSetListener: null,
+      onCoreRemove: null, // Phase 5: the core's sleep timer events (only sent while its switch is on)
       onMediaPlayerChangedListener: null,
       sleepInterval: null,
       currentEndOfChapterTime: 0,
@@ -463,6 +464,12 @@ export default {
     this.onLocalMediaProgressUpdateListener = await AbsAudioPlayer.addListener('onLocalMediaProgressUpdate', this.onLocalMediaProgressUpdate)
     this.onSleepTimerEndedListener = await AbsAudioPlayer.addListener('onSleepTimerEnded', this.onSleepTimerEnded)
     this.onSleepTimerSetListener = await AbsAudioPlayer.addListener('onSleepTimerSet', this.onSleepTimerSet)
+    this.onCoreRemove = await onCore((event, data) => {
+      if (event === 'sleepTimerSet') this.onSleepTimerSet(data)
+      else if (event === 'sleepTimerEnded') this.onSleepTimerEnded(data)
+      // The core saves the local progress while playing (saver.js) and sends it here, as the native event above
+      else if (event === 'onLocalMediaProgressUpdate') this.onLocalMediaProgressUpdate(data)
+    })
     this.onMediaPlayerChangedListener = await AbsAudioPlayer.addListener('onMediaPlayerChanged', this.onMediaPlayerChanged)
 
     this.playbackSpeed = this.$store.getters['user/getUserSetting']('playbackRate')
@@ -482,6 +489,7 @@ export default {
     this.onLocalMediaProgressUpdateListener?.remove()
     this.onSleepTimerEndedListener?.remove()
     this.onSleepTimerSetListener?.remove()
+    this.onCoreRemove?.()
     this.onMediaPlayerChangedListener?.remove()
 
     this.$eventBus.$off('abs-ui-ready', this.onReady)

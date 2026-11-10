@@ -5,6 +5,9 @@ import android.media.MediaPlayer
 import android.os.*
 import android.util.Log
 import com.audiobookshelf.app.R
+import com.audiobookshelf.app.core.CoreSleep
+import com.audiobookshelf.app.core.CoreSwitch
+import com.audiobookshelf.app.core.SensorConnector
 import com.audiobookshelf.app.device.DeviceManager
 import com.audiobookshelf.app.player.PlayerNotificationService
 import com.audiobookshelf.app.player.SLEEP_TIMER_WAKE_UP_EXPIRATION
@@ -380,6 +383,10 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
    * minute grace period after the timer ends or while media is playing.
    */
   fun handleShake() {
+    if (CoreSwitch.coreSleep) { // Phase 5: the core decides (sensor/shake event)
+      SensorConnector.emitShake()
+      return
+    }
     if ((sleepTimerRunning && getIsPlaying()) || sleepTimerFinishedAt > 0L) {
       if (DeviceManager.deviceData.deviceSettings?.disableShakeToResetSleepTimer == true) {
         Log.d(tag, "Shake to reset sleep timer is disabled")
@@ -447,6 +454,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
 
   /** Checks whether the auto sleep timer should be set, and set up auto sleep timer if so. */
   fun checkAutoSleepTimer() {
+    if (CoreSwitch.coreSleep) return // Phase 5: the core runs the auto check
     if (sleepTimerRunning) { // Sleep timer already running
       return
     }
@@ -516,6 +524,7 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
    * @param playbackSessionId String - the playback session ID.
    */
   fun handleMediaPlayEvent(playbackSessionId: String) {
+    if (CoreSwitch.coreSleep) return // Phase 5: the core handles the playing event
     // Check if the playback session has changed
     // If it hasn't changed OR the sleep timer is running then check reset the timer
     //   e.g. You set a manual sleep timer for 10 mins, then decide to change books, the sleep timer
@@ -533,6 +542,10 @@ constructor(private val playerNotificationService: PlayerNotificationService) {
    * Called when app resumes from background to sync UI state.
    */
   fun sendCurrentSleepTimerState() {
+    if (CoreSwitch.coreSleep) {
+      CoreSleep.call("resend")
+      return
+    }
     if (sleepTimerRunning) {
       val timeRemaining = getSleepTimerTimeRemainingSeconds(getPlaybackSpeed())
       playerNotificationService.clientEventEmitter?.onSleepTimerSet(timeRemaining, isAutoSleepTimer)

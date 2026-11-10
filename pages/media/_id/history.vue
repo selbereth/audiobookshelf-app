@@ -26,7 +26,7 @@
 </template>
 
 <script>
-import { AbsAudioPlayer } from '@/plugins/capacitor'
+import { AbsAudioPlayer, onCore } from '@/plugins/capacitor'
 
 export default {
   async asyncData({ params, store, redirect, app, query }) {
@@ -39,7 +39,8 @@ export default {
   },
   data() {
     return {
-      onMediaItemHistoryUpdatedListener: null
+      onMediaItemHistoryUpdatedListener: null,
+      offCore: null
     }
   },
   computed: {
@@ -188,7 +189,8 @@ export default {
         console.error('Invalid media item history', mediaItemHistory)
         return
       }
-      if (mediaItemHistory.id !== this.mediaItemHistory.id) {
+      // this.mediaItemHistory is nothing when the history was not found (getMediaItemHistory answers nothing)
+      if (!this.mediaItemHistory || mediaItemHistory.id !== this.mediaItemHistory.id) {
         return
       }
       console.log('Media Item History updated')
@@ -198,9 +200,16 @@ export default {
   },
   async mounted() {
     this.onMediaItemHistoryUpdatedListener = await AbsAudioPlayer.addListener('onMediaItemHistoryUpdated', this.onMediaItemHistoryUpdated)
+    // Android: the core sends the history updates it makes (a sync event from the server)
+    if (this.$platform === 'android') {
+      this.offCore = await onCore((event, data) => {
+        if (event === 'onMediaItemHistoryUpdated') this.onMediaItemHistoryUpdated(data)
+      })
+    }
   },
   beforeDestroy() {
     this.onMediaItemHistoryUpdatedListener?.remove()
+    this.offCore?.()
   }
 }
 </script>

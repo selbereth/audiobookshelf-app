@@ -32,6 +32,7 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
       // If playing set seeking flag
       Log.d(tag, "onPositionDiscontinuity: oldPosition=${oldPosition.positionMs}/${oldPosition.mediaItemIndex}, newPosition=${newPosition.positionMs}/${newPosition.mediaItemIndex}, isPlaying=${playerNotificationService.currentPlayer.isPlaying} reason=SEEK")
       playerNotificationService.mediaProgressSyncer.seek()
+      com.audiobookshelf.app.core.PlayerConnector.emitState("seeked", playerNotificationService)
       lastPauseTime = 0 // When seeking while paused reset the auto-rewind
     } else {
       Log.d(tag, "onPositionDiscontinuity: oldPosition=${oldPosition.positionMs}/${oldPosition.mediaItemIndex}, newPosition=${newPosition.positionMs}/${newPosition.mediaItemIndex}, isPlaying=${playerNotificationService.currentPlayer.isPlaying}, reason=$reason")
@@ -55,13 +56,15 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
     }
 
     lazyIsPlaying = isPlaying
+    com.audiobookshelf.app.core.PlayerConnector.emitState(if (isPlaying) "playing" else "paused", playerNotificationService)
 
     // Update widget
     DeviceManager.widgetUpdater?.onPlayerChanged(playerNotificationService)
 
     if (isPlaying) {
       Log.d(tag, "SeekBackTime: Player is playing")
-      if (lastPauseTime > 0 && DeviceManager.deviceData.deviceSettings?.disableAutoRewind != true) {
+      // Phase 9: with corePlayer on, the core seeks back (utils/core/modules/player.js); this block stays silent
+      if (!com.audiobookshelf.app.core.CoreSwitch.corePlayer && lastPauseTime > 0 && DeviceManager.deviceData.deviceSettings?.disableAutoRewind != true) {
         Log.d(tag, "SeekBackTime: playing started now set seek back time $lastPauseTime")
         var seekBackTime = calcPauseSeekBackTime()
         if (seekBackTime > 0) {
@@ -101,7 +104,7 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
         // Handles auto-starting sleep timer and resetting sleep timer
         playerNotificationService.sleepTimerManager.handleMediaPlayEvent(it.id)
 
-        player.volume = 1F // Volume on sleep timer might have decreased this
+        if (!com.audiobookshelf.app.core.CoreSwitch.coreSleep) player.volume = 1F // Volume on sleep timer might have decreased this (the core does it when its switch is on)
 
         playerNotificationService.mediaProgressSyncer.play(it)
       }
@@ -142,6 +145,7 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
       }
       if (playerNotificationService.currentPlayer.playbackState == Player.STATE_ENDED) {
         Log.d(tag, "STATE_ENDED")
+        com.audiobookshelf.app.core.PlayerConnector.emitState("ended", playerNotificationService)
         playerNotificationService.sendClientMetadata(PlayerState.ENDED)
 
         playerNotificationService.handlePlaybackEnded()

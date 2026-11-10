@@ -8,35 +8,31 @@ import io.rebble.pebblekit2.common.model.PebbleDictionary
 import io.rebble.pebblekit2.common.model.PebbleDictionaryItem
 import io.rebble.pebblekit2.common.model.ReceiveResult
 import io.rebble.pebblekit2.common.model.WatchIdentifier
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.UUID
 
 /**
- * The Pebble app binds to this service when the watchapp is opened, which starts this app's process if it is not
- * running. Messages from the watch are turned into commands for the audiobook player, and the answer (what is
- * playing) is sent back to the watch.
+ * The Pebble app binds to this service when the watchapp is opened, which starts this app's process if it is not running. This
+ * is only the transport: a message from the watch is handed to the shared logic (`utils/pebble/hub.js`, run by [PebbleHost])
+ * as JSON, and the messages the logic wants sent are written into the watch's format by [send]. It decides nothing.
  */
 class PebbleListenerService : BasePebbleListenerService() {
   private val tag = "PebbleListenerService"
-  private lateinit var controller: PebbleController
   private lateinit var sender: DefaultPebbleSender
-  private var lastStatusSentAt = 0L
-  private var watcher: Job? = null
-  @Volatile private var starting = false // a start from the watch is under way: the player reports paused until it plays
 
   override fun onCreate() {
     super.onCreate()
     // The app's database is normally opened by the main screen, which is not running when the watch starts the app
     DbManager.initialize(applicationContext)
-    controller = PebbleController(applicationContext)
     sender = DefaultPebbleSender(applicationContext)
+    instance = this
   }
 
   override fun onDestroy() {
-    watcher?.cancel()
-    controller.release()
+    if (instance === this) instance = null
+    PebbleHost.stop()
     // The library unbinds a connection that was never opened when nothing was sent, which throws
     runCatching { sender.close() }
     super.onDestroy()
@@ -44,87 +40,71 @@ class PebbleListenerService : BasePebbleListenerService() {
 
   override fun onAppOpened(watchappUUID: UUID, watch: WatchIdentifier) {
     if (watchappUUID != PebbleProtocol.WATCHAPP_UUID) return
-    coroutineScope.launch { sendStatus(controller.status(), watch) }
-    watchPlayer(watch)
+    PebbleListenerService.watch = watch
+    coroutineScope.launch { PebbleHost.call(applicationContext, "opened") }
   }
 
-  /**
-   * While the watchapp is open, tell the watch when the player changes without the watch asking: started or paused
-   * from the phone or a headset, a new chapter, or progress (the bar on the watch moves in steps of this size).
-   */
-  private fun watchPlayer(watch: WatchIdentifier) {
-    watcher?.cancel()
-    watcher = coroutineScope.launch {
-      var last: PebbleStatus? = null
-      while (true) {
-        delay(1000)
-        val status = controller.status()
-        val before = last
-        if (before == null) {
-          last = status
-          continue
-        }
-        // A command from the watch is answered by its own message; LOADING is followed by waitUntilPlaying
-        if (status.state == PebbleProtocol.STATE_LOADING || starting) continue
-        val progress = kotlin.math.abs(status.positionSeconds - before.positionSeconds) >= PROGRESS_STEP_SECONDS
-        if (status.state != before.state || status.kind != before.kind || status.title != before.title || status.chapter != before.chapter || progress) {
-          last = status
-          sendStatus(status, watch)
-        }
-      }
-    }
+  override fun onAppClosed(watchappUUID: UUID, watch: WatchIdentifier) {
+    if (watchappUUID != PebbleProtocol.WATCHAPP_UUID) return
+    coroutineScope.launch { PebbleHost.call(applicationContext, "closed") }
   }
 
   override suspend fun onMessageReceived(watchappUUID: UUID, data: PebbleDictionary, watch: WatchIdentifier): ReceiveResult {
     Log.d(tag, "Message from the watch for $watchappUUID: $data")
     if (watchappUUID != PebbleProtocol.WATCHAPP_UUID) return ReceiveResult.Nack
-    // The number can arrive as any integer type, whatever the watch wrote it as
-    val command = when (val value = data[PebbleProtocol.KEY_COMMAND]?.value) {
-      is UByte -> value.toInt()
-      is Byte -> value.toInt()
-      is UShort -> value.toInt()
-      is Short -> value.toInt()
-      is UInt -> value.toInt()
-      is Int -> value
-      else -> null
-    } ?: return ReceiveResult.Nack
-    Log.d(tag, "Command from the watch: $command")
-    // Acknowledge at once (the watch times out otherwise) and answer when the player has done it
-    coroutineScope.launch {
-      // The status was just sent when the app opened: the watch's own hello needs no second copy (it would refuse it)
-      if (command == PebbleProtocol.CMD_HELLO && System.currentTimeMillis() - lastStatusSentAt < 2000) return@launch
-      val status = controller.handle(command)
-      if (status.state == PebbleProtocol.STATE_LOADING) starting = true
-      try {
-        sendStatus(status, watch)
-        if (status.state == PebbleProtocol.STATE_LOADING) sendStatus(controller.waitUntilPlaying(), watch)
-      } finally {
-        starting = false
+    PebbleListenerService.watch = watch
+    // By key number: what a key means is the shared logic's business
+    val message = JSONObject()
+    data.forEach { (key, item) ->
+      when (val value = item.value) {
+        is UByte -> message.put(key.toString(), value.toInt())
+        is Byte -> message.put(key.toString(), value.toInt())
+        is UShort -> message.put(key.toString(), value.toInt())
+        is Short -> message.put(key.toString(), value.toInt())
+        is UInt -> message.put(key.toString(), value.toLong())
+        is Int -> message.put(key.toString(), value)
+        is String -> message.put(key.toString(), value)
+        else -> {}
       }
     }
+    // Acknowledge at once (the watch times out otherwise) and let the logic answer when it has done it
+    coroutineScope.launch { PebbleHost.call(applicationContext, "handle", JSONArray().put(message)) }
     return ReceiveResult.Ack
   }
 
-  private suspend fun sendStatus(status: PebbleStatus, watch: WatchIdentifier) {
-    lastStatusSentAt = System.currentTimeMillis()
-    val message: PebbleDictionary = mapOf(
-      PebbleProtocol.KEY_STATE to PebbleDictionaryItem.UInt8(status.state),
-      PebbleProtocol.KEY_TITLE to PebbleDictionaryItem.Text(status.title),
-      PebbleProtocol.KEY_CHAPTER to PebbleDictionaryItem.Text(status.chapter),
-      PebbleProtocol.KEY_POSITION to PebbleDictionaryItem.UInt32(status.positionSeconds.toUInt()),
-      PebbleProtocol.KEY_DURATION to PebbleDictionaryItem.UInt32(status.durationSeconds.toUInt()),
-      PebbleProtocol.KEY_CHAPTER_NUMBER to PebbleDictionaryItem.UInt16(status.chapterNumber.toUShort()),
-      PebbleProtocol.KEY_CHAPTER_COUNT to PebbleDictionaryItem.UInt16(status.chapterCount.toUShort()),
-      PebbleProtocol.KEY_CHAPTER_POSITION to PebbleDictionaryItem.UInt32(status.chapterPosition.toUInt()),
-      PebbleProtocol.KEY_CHAPTER_DURATION to PebbleDictionaryItem.UInt32(status.chapterDuration.toUInt()),
-      PebbleProtocol.KEY_KIND to PebbleDictionaryItem.UInt8(status.kind.toUByte()),
-      PebbleProtocol.KEY_VOLUME to PebbleDictionaryItem.UInt8(status.volume.toUByte())
-    )
-    val result = sender.sendDataToPebble(PebbleProtocol.WATCHAPP_UUID, message, listOf(watch))
-    Log.d(tag, "Sent status ${status.state} '${status.title}' chapter ${status.chapterNumber}/${status.chapterCount} at ${status.positionSeconds}s: $result")
+  private suspend fun sendToWatch(items: JSONArray) {
+    val target = watch
+    val message = HashMap<UInt, PebbleDictionaryItem>()
+    for (i in 0 until items.length()) {
+      val item = items.getJSONArray(i)
+      val key = item.getInt(0).toUInt()
+      message[key] = when (item.getString(1)) {
+        "u8" -> PebbleDictionaryItem.UInt8(item.getInt(2).toUByte())
+        "u16" -> PebbleDictionaryItem.UInt16(item.getInt(2).toUShort())
+        "u32" -> PebbleDictionaryItem.UInt32(item.getLong(2).toUInt())
+        else -> PebbleDictionaryItem.Text(item.getString(2))
+      }
+    }
+    if (target == null) {
+      Log.i(tag, "No watch to send to: $items")
+      return
+    }
+    val result = sender.sendDataToPebble(PebbleProtocol.WATCHAPP_UUID, message, listOf(target))
+    Log.d(tag, "Sent $items: $result")
   }
 
-  private companion object {
-    const val PROGRESS_STEP_SECONDS = 20
+  companion object {
+    @Volatile private var instance: PebbleListenerService? = null
+    @Volatile private var watch: WatchIdentifier? = null
+
+    /** A message the shared logic wants sent to the watch: [[key number, "u8" | "u16" | "u32" | "text", value], ...] */
+    suspend fun send(items: JSONArray) {
+      val service = instance
+      if (service == null) {
+        Log.i("PebbleListenerService", "Not connected to the Pebble app: $items")
+        return
+      }
+      service.sendToWatch(items)
+    }
   }
 }

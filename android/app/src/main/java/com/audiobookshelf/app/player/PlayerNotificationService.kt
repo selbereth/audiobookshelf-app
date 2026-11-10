@@ -188,6 +188,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
   // detach player
   override fun onDestroy() {
+    DeviceManager.onSettingsChanged = null
     try {
       val connectivityManager =
               getSystemService(ConnectivityManager::class.java) as ConnectivityManager
@@ -197,6 +198,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     }
 
     Log.d(tag, "onDestroy")
+    com.audiobookshelf.app.core.PlayerConnector.service = null
     isStarted = false
     isClosed = true
     DeviceManager.widgetUpdater?.onPlayerChanged(this)
@@ -228,6 +230,11 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
     // Initialize Paper
     DbManager.initialize(ctx)
+
+    // The JS core (hidden web view) lives as long as the process
+    com.audiobookshelf.app.core.CoreHost.start(ctx)
+    com.audiobookshelf.app.core.PlayerConnector.service = this
+    DeviceManager.onSettingsChanged = { Handler(Looper.getMainLooper()).post { setMediaSessionConnectorPlaybackActions() } }
 
     // Initialize widget
     DeviceManager.initializeWidgetUpdater(ctx)
@@ -471,6 +478,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     }
 
     currentPlaybackSession = playbackSession
+    com.audiobookshelf.app.core.PlayerConnector.emitSessionOpened(playbackSession)
     DeviceManager.setLastPlaybackSession(
             playbackSession
     ) // Save playback session to use when app is closed
@@ -618,6 +626,11 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
   }
 
   fun handlePlayerPlaybackError(errorMessage: String) {
+    // Phase 9 (item 4): with corePlayer on and the core ready, the core decides the fallback (utils/core/modules/player.js)
+    if (com.audiobookshelf.app.core.CoreSwitch.corePlayer && com.audiobookshelf.app.core.CoreHost.isReady) {
+      if (currentPlaybackSession != null) com.audiobookshelf.app.core.PlayerConnector.emitPlaybackError(this, errorMessage)
+      return
+    }
     // On error and was attempting to direct play - fallback to transcode
     currentPlaybackSession?.let { playbackSession ->
       if (playbackSession.isDirectPlay) {
@@ -698,6 +711,30 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
   fun switchToPlayer(useCastPlayer: Boolean) {
     val wasPlaying = currentPlayer.isPlaying
+    // Phase 10 (slice C1): with coreCast on and the core ready, the core says whether to switch and which player to stop
+    // (utils/core/modules/cast.js). No answer: the Kotlin rule below runs
+    if (com.audiobookshelf.app.core.CoreSwitch.coreCast && com.audiobookshelf.app.core.CoreHost.isReady) {
+      val current = if (currentPlayer == castPlayer) "cast" else "exo"
+      com.audiobookshelf.app.core.CoreCast.switchPlan(useCastPlayer, current, castPlayer != null, wasPlaying) { plan ->
+        if (plan == null) {
+          switchPlayerHere(useCastPlayer, wasPlaying)
+        } else if (plan.optBoolean("noop")) {
+          Log.d(tag, "switchToPlayer: the core says this player is already in use")
+        } else {
+          when (plan.optString("stop")) {
+            "exo" -> mPlayer.stop()
+            "cast" -> castPlayer?.stop()
+          }
+          switchPlayerTail(useCastPlayer, wasPlaying)
+        }
+      }
+      return
+    }
+    switchPlayerHere(useCastPlayer, wasPlaying)
+  }
+
+  /** The Kotlin rule of switchToPlayer (before Phase 10): returns at once when the player is already in use */
+  private fun switchPlayerHere(useCastPlayer: Boolean, wasPlaying: Boolean) {
     if (useCastPlayer) {
       if (currentPlayer == castPlayer) {
         Log.d(tag, "switchToPlayer: Already using Cast Player " + castPlayer?.deviceInfo)
@@ -715,7 +752,11 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
         castPlayer?.stop()
       }
     }
+    switchPlayerTail(useCastPlayer, wasPlaying)
+  }
 
+  /** The rest of switchToPlayer: the new player is set, and the session is prepared on it. Unchanged from before Phase 10 */
+  private fun switchPlayerTail(useCastPlayer: Boolean, wasPlaying: Boolean) {
     if (currentPlaybackSession == null) {
       Log.e(tag, "switchToPlayer: No Current playback session")
     } else {
@@ -762,18 +803,29 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     val currentVol = try { castPlayer?.getDeviceVolume() ?: 0 } catch (_: Exception) { 0 }
     val provider = object : VolumeProviderCompat(VolumeProviderCompat.VOLUME_CONTROL_ABSOLUTE, 100, currentVol) {
       override fun onSetVolumeTo(volume: Int) {
+        // Phase 10 (slice C1): with coreCast on the core clamps the value (utils/core/modules/cast.js); no answer: the clamp below
+        if (com.audiobookshelf.app.core.CoreSwitch.coreCast && com.audiobookshelf.app.core.CoreHost.isReady) {
+          com.audiobookshelf.app.core.CoreCast.volumeSet(volume) { v -> applyCastVolume(v ?: volume.coerceIn(0, 100)) }
+          return
+        }
         // Clamp, update UI immediately, then send to device
-        val clamped = volume.coerceIn(0, 100)
-        setCurrentVolume(clamped)
-        try { castPlayer?.setDeviceVolume(clamped) } catch (_: Exception) {}
+        applyCastVolume(volume.coerceIn(0, 100))
       }
 
       override fun onAdjustVolume(direction: Int) {
         // Use Android-provided step (−1, 0, +1). Clamp, update UI immediately, then send.
         val current = currentVolume
-        val target = (current + direction).coerceIn(0, 100)
-        setCurrentVolume(target)
-        try { castPlayer?.setDeviceVolume(target) } catch (_: Exception) {}
+        if (com.audiobookshelf.app.core.CoreSwitch.coreCast && com.audiobookshelf.app.core.CoreHost.isReady) {
+          com.audiobookshelf.app.core.CoreCast.volumeAdjust(current, direction) { v -> applyCastVolume(v ?: (current + direction).coerceIn(0, 100)) }
+          return
+        }
+        applyCastVolume((current + direction).coerceIn(0, 100))
+      }
+
+      /** Sets the volume shown and sends it to the Cast device (the same step for both paths) */
+      private fun applyCastVolume(volume: Int) {
+        setCurrentVolume(volume)
+        try { castPlayer?.setDeviceVolume(volume) } catch (_: Exception) {}
       }
     }
     remoteVolumeProvider = provider
@@ -1021,9 +1073,15 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     seekPlayer(getCurrentTime() - amount)
   }
 
+  /**
+   * The one place the playback speed is changed, whoever asks (the app's screen, Android Auto, the Pebble watch): it is
+   * saved in the user settings the app reads when it opens, and the open app is told so its screen follows.
+   */
   fun setPlaybackSpeed(speed: Float) {
-    mediaManager.userSettingsPlaybackRate = speed
+    mediaManager.setSavedPlaybackRate(speed)
     currentPlayer.setPlaybackSpeed(speed)
+    com.audiobookshelf.app.core.PlayerConnector.emitState("rate", this)
+    clientEventEmitter?.onPlaybackSpeedChanged(speed)
 
     // Refresh Android Auto actions
     mediaProgressSyncer.currentPlaybackSession?.let { setMediaSessionConnectorCustomActions(it) }
@@ -1031,6 +1089,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
 
   fun closePlayback(calledOnError: Boolean? = false) {
     Log.d(tag, "closePlayback")
+    com.audiobookshelf.app.core.PlayerConnector.emitState("closed", this, calledOnError == true)
     val config = DeviceManager.serverConnectionConfig
 
     val isLocal = mediaProgressSyncer.currentIsLocal
@@ -1042,16 +1101,16 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
               calledOnError == false
       ) { // If closing on error then do not sync progress (causes exception)
         Log.d(tag, "Media Progress syncer stopped")
-        // If not local session then close on server
-        if (!isLocal && currentSessionId != "") {
+        // If not local session then close on server (the core closes it while its switch is on)
+        if (!isLocal && currentSessionId != "" && !com.audiobookshelf.app.core.CoreSwitch.coreSaver) {
           apiHandler.closePlaybackSession(currentSessionId, config) {
             Log.d(tag, "Closed playback session $currentSessionId")
           }
         }
       }
     } else {
-      // If not local session then close on server
-      if (!isLocal && currentSessionId != "") {
+      // If not local session then close on server (the core closes it while its switch is on)
+      if (!isLocal && currentSessionId != "" && !com.audiobookshelf.app.core.CoreSwitch.coreSaver) {
         apiHandler.closePlaybackSession(currentSessionId, config) {
           Log.d(tag, "Closed playback session $currentSessionId")
         }
@@ -1225,6 +1284,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     AbsLogger.info(tag, "onLoadChildren: parentMediaId: $parentMediaId (${DeviceManager.serverConnectionConfigString})")
 
     result.detach()
+    // Phase 9 (item 5): with corePlayer on the core's tree answers the root, Libraries and Recent; a miss keeps the old tree below
+    if (com.audiobookshelf.app.core.CoreSwitch.corePlayer && com.audiobookshelf.app.core.CoreHost.isReady) {
+      com.audiobookshelf.app.core.PlayerConnector.browseChildren(parentMediaId, this)?.let {
+        result.sendResult(it)
+        return
+      }
+    }
 
     // Prevent crashing if app is restarted while browsing
     if ((parentMediaId != DOWNLOADS_ROOT && parentMediaId != AUTO_MEDIA_ROOT) && !firstLoadDone) {
@@ -1341,6 +1407,7 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                           mediaManager.allLibraryPersonalizationsDone
                   )
           onBrowseTreeInitialized()
+          com.audiobookshelf.app.core.PlayerConnector.emitBrowseInputs(mediaManager.serverItemsInProgress.size, mediaManager.serverLibraries, mediaManager.allLibraryPersonalizationsDone)
           val children =
                   browseTree[parentMediaId]?.map { item ->
                     Log.d(tag, "Found top menu item: ${item.description.title}")
@@ -2077,6 +2144,13 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
                 isShakeSensorRegistered = false
               }
             }
+  }
+
+  // Phase 5: the core's sleep timer owns the 2 minute window and asks for the unregister when it is due
+  fun unregisterSensorNow() {
+    if (!isShakeSensorRegistered) return
+    mSensorManager!!.unregisterListener(mShakeDetector)
+    isShakeSensorRegistered = false
   }
 
   private val networkCallback =

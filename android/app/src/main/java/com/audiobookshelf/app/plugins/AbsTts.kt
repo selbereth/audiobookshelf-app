@@ -5,6 +5,9 @@ import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.audiobookshelf.app.MainActivity
+import com.audiobookshelf.app.core.CoreHost
+import com.audiobookshelf.app.core.CoreSleep
+import com.audiobookshelf.app.core.CoreSwitch
 import com.audiobookshelf.app.player.PlayerNotificationService
 import com.audiobookshelf.app.tts.TtsController
 import com.audiobookshelf.app.tts.TtsHeadless
@@ -17,6 +20,7 @@ import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
+import org.json.JSONObject
 
 @CapacitorPlugin(name = "AbsTts")
 class AbsTts : Plugin() {
@@ -41,6 +45,9 @@ class AbsTts : Plugin() {
     }
     override fun onSleepTimer(remainingMs: Long, running: Boolean, atChapterEnd: Boolean) {
       notifyListeners("sleepTimer", JSObject().put("remainingMs", remainingMs).put("running", running).put("atChapterEnd", atChapterEnd))
+    }
+    override fun onRate(rate: Float) {
+      notifyListeners("rate", JSObject().put("rate", rate.toString().toDouble()))
     }
     override fun onError(code: String, message: String) {
       notifyListeners("error", JSObject().put("code", code).put("message", message))
@@ -185,8 +192,14 @@ class AbsTts : Plugin() {
 
   @PluginMethod
   fun setRate(call: PluginCall) {
-    svc?.controller?.updateVoice(newRate = call.getFloat("rate", 1f))
+    val rate = call.getFloat("rate", 1f) ?: 1f
+    svc?.controller?.changeRate(rate) ?: TtsController.saveRate(context, rate)
     call.resolve()
+  }
+
+  @PluginMethod
+  fun getRate(call: PluginCall) {
+    call.resolve(JSObject().put("rate", TtsController.savedRate(context).toString().toDouble()))
   }
 
   @PluginMethod
@@ -204,8 +217,27 @@ class AbsTts : Plugin() {
   @PluginMethod
   fun setSleepTimer(call: PluginCall) {
     val s = svc ?: return call.reject("No TTS session")
-    if (call.getBoolean("endOfChapter", false) == true) {
-      // JS sends a very large number for "no later chapter": the end of the book
+    val endOfChapter = call.getBoolean("endOfChapter", false) == true
+    // Phase 10 (slice B): with coreTts on and the core ready, the core keeps the timer (utils/core/modules/tts.js)
+    if (CoreSwitch.coreTts && CoreHost.isReady) {
+      val args = JSONObject().put("target", "tts").put("isChapterTime", endOfChapter).put("ms", call.data.optLong("ms", 0L))
+        .put("untilSpine", untilSpineOf(call)).put("currentSpine", s.controller.currentSentence?.spine ?: JSONObject.NULL)
+      CoreSleep.call("set", args) { ok, json ->
+        if (!CoreSleep.succeeded(ok, json)) setSleepTimerHere(s, call, endOfChapter) else call.resolve()
+      }
+      return
+    }
+    setSleepTimerHere(s, call, endOfChapter)
+  }
+
+  /** JS sends a very large number for "no later chapter": the end of the book. -1 (none sent) is no spine: the core uses the next one */
+  private fun untilSpineOf(call: PluginCall): Any {
+    val until = call.data.optLong("untilSpine", -1L)
+    return if (until < 0) JSONObject.NULL else until
+  }
+
+  private fun setSleepTimerHere(s: TtsService, call: PluginCall, endOfChapter: Boolean) {
+    if (endOfChapter) {
       val until = call.data.optLong("untilSpine", -1L)
       s.setSleepAtChapterEnd(if (until < 0) null else until.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
     } else {
@@ -216,13 +248,32 @@ class AbsTts : Plugin() {
 
   @PluginMethod
   fun adjustSleepTimer(call: PluginCall) {
-    svc?.adjustSleepTimer(call.data.optLong("ms", 0L))
+    val ms = call.data.optLong("ms", 0L)
+    val live = svc
+    if (CoreSwitch.coreTts && CoreHost.isReady) {
+      // The core adds or takes away the time (increase / decrease), as the Kotlin adjust does
+      val method = if (ms >= 0) "increase" else "decrease"
+      CoreSleep.call(method, JSONObject().put("target", "tts").put("ms", Math.abs(ms))) { ok, json ->
+        if (!CoreSleep.succeeded(ok, json)) live?.adjustSleepTimer(ms)
+        call.resolve()
+      }
+      return
+    }
+    live?.adjustSleepTimer(ms)
     call.resolve()
   }
 
   @PluginMethod
   fun cancelSleepTimer(call: PluginCall) {
-    svc?.cancelSleepTimer()
+    val live = svc
+    if (CoreSwitch.coreTts && CoreHost.isReady) {
+      CoreSleep.call("cancel", JSONObject().put("target", "tts")) { ok, json ->
+        if (!CoreSleep.succeeded(ok, json)) live?.cancelSleepTimer()
+        call.resolve()
+      }
+      return
+    }
+    live?.cancelSleepTimer()
     call.resolve()
   }
 

@@ -5,5 +5,8 @@
         <receiver
             android:name="com.audiobookshelf.app.pebble.PebbleDebugReceiver"
             android:exported="true" />
+        <receiver
+            android:name="com.audiobookshelf.app.core.CoreDebugReceiver"
+            android:exported="true" />
     </application>
 </manifest>

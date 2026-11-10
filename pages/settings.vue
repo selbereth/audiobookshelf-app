@@ -189,6 +189,20 @@
       </div>
     </template>
 
+    <!-- Debug logs (Android only): saved on this device, shared only when you tap the button -->
+    <template v-if="isAndroid">
+      <p class="uppercase text-xs font-semibold text-fg-muted mb-2 mt-10">{{ $strings.HeaderDebugLogs }}</p>
+      <div class="flex items-center py-3">
+        <div class="w-10 flex justify-center" @click.stop="toggleDebugLogs">
+          <ui-toggle-switch v-model="debugLogs.enabled" class="pointer-events-none" />
+        </div>
+        <p class="pl-4">{{ $strings.LabelDebugLogsEnable }}</p>
+      </div>
+      <p class="text-sm text-fg-muted pb-3">{{ $strings.LabelDebugLogsHelp }}</p>
+      <p class="text-sm pb-3">{{ debugLogsSummary }}</p>
+      <ui-btn :disabled="!debugLogs.days" color="primary" class="mb-4" @click="shareDebugLogs">{{ $strings.ButtonShareDebugLogs }}</ui-btn>
+    </template>
+
     <div v-show="loading" class="w-full h-full absolute top-0 left-0 flex items-center justify-center z-10">
       <ui-loading-indicator />
     </div>
@@ -203,6 +217,7 @@
 import { Dialog } from '@capacitor/dialog'
 import jumpLabelMixin from '@/mixins/jumpLabel'
 import { AUTO_DELETE_DEFAULT_SETTINGS, AUTO_DELETE_DELAY_DAYS } from '@/utils/autoDelete'
+import { AbsDebugLog } from '@/plugins/capacitor'
 
 export default {
   mixins: [jumpLabelMixin],
@@ -210,6 +225,7 @@ export default {
     return {
       loading: false,
       deviceData: null,
+      debugLogs: { enabled: false, days: 0, bytes: 0 },
       showMoreMenuDialog: false,
       showSleepTimerLengthModal: false,
       showAutoSleepTimerRewindLengthModal: false,
@@ -373,6 +389,14 @@ export default {
     },
     isiOS() {
       return this.$platform === 'ios'
+    },
+    isAndroid() {
+      return this.$platform === 'android'
+    },
+    debugLogsSummary() {
+      if (!this.debugLogs.days) return this.$strings.LabelDebugLogsNone
+      const megabytes = (this.debugLogs.bytes / (1024 * 1024)).toFixed(1)
+      return this.$getString('LabelDebugLogsStored', [this.debugLogs.days, megabytes])
     },
     jumpForwardSecondsOptions() {
       return this.$store.state.globals.jumpForwardSecondsOptions || []
@@ -718,6 +742,29 @@ export default {
       this.settings.androidAutoBrowseLimitForGrouping = deviceSettings.androidAutoBrowseLimitForGrouping
       this.settings.androidAutoBrowseSeriesSequenceOrder = deviceSettings.androidAutoBrowseSeriesSequenceOrder || 'ASC'
     },
+    async loadDebugLogs() {
+      if (!this.isAndroid) return
+      try {
+        this.debugLogs = await AbsDebugLog.getDebugLogs()
+      } catch (error) {
+        console.error('Could not read the debug logs state', error)
+      }
+    },
+    async toggleDebugLogs() {
+      if (!this.isAndroid) return
+      try {
+        this.debugLogs = await AbsDebugLog.setDebugLogsEnabled({ enabled: !this.debugLogs.enabled })
+      } catch (error) {
+        console.error('Could not change the debug logs setting', error)
+      }
+    },
+    async shareDebugLogs() {
+      try {
+        await AbsDebugLog.shareDebugLogs()
+      } catch (error) {
+        Dialog.alert({ title: this.$strings.HeaderDebugLogs, message: error?.message || String(error) })
+      }
+    },
     async init() {
       this.loading = true
       this.theme = (await this.$localStore.getTheme()) || 'dark'
@@ -725,6 +772,7 @@ export default {
       this.$store.commit('setDeviceData', this.deviceData)
       this.setDeviceSettings()
       this.autoDelete = await this.$autoDelete.getSettings()
+      await this.loadDebugLogs()
       this.loading = false
     }
   },
