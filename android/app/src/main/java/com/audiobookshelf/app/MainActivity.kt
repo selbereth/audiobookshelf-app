@@ -132,7 +132,11 @@ class MainActivity : BridgeActivity() {
 
   private fun requestNeededPermissions() {
     val needed = mutableListOf<String>()
-    if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+    // From Android 13 (API 33) READ_EXTERNAL_STORAGE is never granted and does nothing (local files go through SAF). Asking for it
+    // there showed a dialog on every cold start: the activity pauses and resumes, and Capacitor's pause/resume events then run
+    // before window.Capacitor exists ("Cannot read properties of undefined (reading 'triggerEvent')").
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
       needed.add(Manifest.permission.READ_EXTERNAL_STORAGE)
     }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
