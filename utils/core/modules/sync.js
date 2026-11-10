@@ -28,6 +28,11 @@ export function syncModule(bridge, { log = console.log, db, api }) {
     for (const server of user.mediaProgress || []) {
       const local = all.find((l) => (l.episodeId != null ? l.libraryItemId === server.libraryItemId && l.episodeId === server.episodeId : l.libraryItemId === server.libraryItemId))
       if (!local) continue
+      // A row without lastUpdate cannot be compared: it is neither applied nor counted as up to date (Kotlin: lastUpdate is a required Long, so the whole user answer failed to parse)
+      if (typeof server.lastUpdate !== 'number') {
+        log(`sync: server progress for item "${rules.mediaItemIdOf(server)}" has no lastUpdate, skipped`)
+        continue
+      }
       if (server.lastUpdate > local.lastUpdate) {
         const logs = []
         if (!same(server.progress, local.progress)) logs.push(`Updated progress from ${local.progress} to ${server.progress}`)

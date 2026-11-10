@@ -3,7 +3,7 @@ import { dbModule } from './modules/db'
 import { apiModule } from './modules/api'
 import { syncModule } from './modules/sync'
 
-function setup(server) {
+function setup(server, log = () => {}) {
   const data = {}, secure = { c1: 'r1' }, served = {}, requests = []
   const bridge = {
     serve: (c, m, fn) => { served[m] = fn },
@@ -25,7 +25,7 @@ function setup(server) {
   let clock = 5000
   const db = dbModule(bridge, { log: () => {}, now: () => clock, emitToUi: () => {} })
   const api = apiModule(bridge, { log: () => {}, db })
-  const sync = syncModule(bridge, { log: () => {}, db, api })
+  const sync = syncModule(bridge, { log, db, api })
   const cfg = { id: 'c1', name: 's', address: 'https://s', userId: 'u', username: 'sam', version: '1', token: 'tok', index: 0, customHeaders: null }
   data.device = { data: JSON.stringify({ serverConnectionConfigs: [cfg], lastServerConnectionConfigId: 'c1', lastPlaybackSession: null, deviceSettings: {} }) }
   const put = (c, k, v) => ((data[c] ||= {})[k] = JSON.stringify(v))
@@ -36,6 +36,16 @@ const ok = (o) => ({ status: 200, headers: {}, body: JSON.stringify(o) })
 const lmp = (id, extra) => ({ id, localLibraryItemId: id, libraryItemId: 'li-' + id, episodeId: null, serverConnectionConfigId: 'c1', progress: 0.1, currentTime: 10, isFinished: false, lastUpdate: 100, ebookLocation: null, ebookProgress: null, ...extra })
 
 const tests = {
+  async 'a server row with no lastUpdate is not treated as up to date: it is skipped and logged'() {
+    const lines = []
+    const t = setup(() => ok({ mediaProgress: [{ libraryItemId: 'li-a', episodeId: null, progress: 0.9, currentTime: 90, isFinished: false, duration: 100, startedAt: 1 }] }), (m) => lines.push(m))
+    t.put('localMediaProgress', 'a', lmp('a'))
+    await t.sync.syncLocalSessionsWithServer()
+    assert.strictEqual(t.get('localMediaProgress', 'a').currentTime, 10, 'local progress kept, nothing taken from the row')
+    assert.strictEqual(t.requests.length, 1, 'only the user request, no PATCH')
+    assert.ok(lines.some((l) => l.includes('no lastUpdate')), 'the row is logged')
+    assert.ok(lines.some((l) => l.endsWith('0 up-to-date, 0 updated')), 'it is not counted as up to date')
+  },
   async 'no connection: nothing happens'() {
     const t = setup(() => ok({}))
     t.data.device.data = JSON.stringify({ serverConnectionConfigs: [], lastServerConnectionConfigId: null })
