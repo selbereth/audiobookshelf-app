@@ -5,6 +5,7 @@ import { progressModule } from './modules/progress'
 // Fake native: records every http request and answers with the scripted server (handler gets {method,url,headers,body,timeoutMs})
 function setup(server, { localFinished = null, current = 'c1' } = {}) {
   const served = {}, requests = []
+  const serialCalls = []
   const bridge = {
     serve: (c, m, fn) => { served[m] = fn },
     call: async (connector, method, a) => {
@@ -17,12 +18,13 @@ function setup(server, { localFinished = null, current = 'c1' } = {}) {
     methods: {
       getDeviceData: async () => ({ lastServerConnectionConfigId: current, serverConnectionConfigs: [{ id: 'c1', address: 'https://s', token: 'tok' }] }),
       setLocalMediaProgressFinished: async (a) => localFinished || { localMediaProgress: { id: 'li-1', isFinished: a.isFinished, serverConnectionConfigId: 'c1', libraryItemId: 'li-1', episodeId: null } }
-    }
+    },
+    serial: (fn) => { serialCalls.push(1); return fn() }
   }
   const api = apiModule(bridge, { log: () => {}, db })
   progressModule(bridge, { api, db })
   const call = (m, args) => served['progress.' + m](args)
-  return { call, requests, served }
+  return { call, requests, served, serialCalls }
 }
 const server = { address: 'https://s', token: 'tok', serverConnectionConfigId: 'c1' }
 const ok = (obj) => ({ status: 200, headers: {}, body: typeof obj === 'string' ? obj : JSON.stringify(obj) })
@@ -35,6 +37,24 @@ const session = {
 }
 
 const tests = {
+  async 'updateMedia: no server item id is not sent (no PATCH to /api/me/progress/), a clear error is answered'() {
+    const t = setup(() => ok({}))
+    const r = await t.call('updateMedia', { libraryItemId: '', episodeId: null, updatePayload: { isFinished: true }, ...server })
+    assert.ok(r.error, 'an error is answered')
+    assert.strictEqual(t.requests.length, 0)
+  },
+  async 'updateLocalFinished: a local progress with no server item id skips the PATCH, server is false, the local answer stays'() {
+    const t = setup(() => ok({}), { localFinished: { localMediaProgress: { id: 'x', isFinished: true, serverConnectionConfigId: 'c1', libraryItemId: null, episodeId: null } } })
+    const r = await t.call('updateLocalFinished', { localLibraryItemId: 'x', isFinished: true })
+    assert.strictEqual(r.server, false)
+    assert.strictEqual(r.local, true)
+    assert.strictEqual(t.requests.length, 0)
+  },
+  async 'updateLocalFinished: the local write goes through the core write queue (db.serial)'() {
+    const t = setup(() => ok({}))
+    await t.call('updateLocalFinished', { localLibraryItemId: 'li-1', isFinished: true })
+    assert.strictEqual(t.serialCalls.length, 1)
+  },
   async 'the module serves the progress methods'() {
     const t = setup(() => ok({}))
     assert.deepStrictEqual(Object.keys(t.served).filter((m) => m.startsWith('progress.')).sort(), ['progress.closeSession', 'progress.getMedia', 'progress.sendLocalSession', 'progress.sendSession', 'progress.updateLocalFinished', 'progress.updateMedia'])

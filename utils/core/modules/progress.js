@@ -34,6 +34,8 @@ export function progressModule(bridge, { api, db }) {
   }
 
   async function updateMedia(a) {
+    // Without the item id the endpoint would be /api/me/progress/ (no item): not sent
+    if (!a.libraryItemId) return { error: 'No library item id for this progress' }
     const endpoint = progressEndpoint(a.libraryItemId, a.episodeId)
     return outcome(await api.request({ method: 'PATCH', endpoint, payload: a.updatePayload, ...server(a) }))
   }
@@ -52,7 +54,7 @@ export function progressModule(bridge, { api, db }) {
    * belongs to the server the user is logged into. Answers {local, server, localMediaProgress} or {error} (the local rule's error).
    */
   async function updateLocalFinished(a) {
-    const r = await db.methods.setLocalMediaProgressFinished(a)
+    const r = await db.serial(() => db.methods.setLocalMediaProgressFinished(a))
     if (r.error) return r
     const p = r.localMediaProgress
     const current = (await db.methods.getDeviceData()).lastServerConnectionConfigId
