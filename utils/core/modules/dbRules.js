@@ -274,9 +274,14 @@ export function sessionTotalDuration(session) {
   return (session.audioTracks || []).reduce((sum, track) => sum + track.duration, 0)
 }
 
-/** PlaybackSession.progress (PlaybackSession.kt:83-84): currentTime / total duration. NaN when the total is 0 */
+/**
+ * PlaybackSession.progress (PlaybackSession.kt:83-84): currentTime / total duration. The Kotlin division gives Infinity (a finished
+ * book) for a total of 0 and NaN for a missing duration; there is no usable progress then, so it is 0 (the Kotlin progressPercent also shows NaN as 0)
+ */
 export function sessionProgress(session) {
-  return session.currentTime / sessionTotalDuration(session)
+  const total = sessionTotalDuration(session)
+  if (!Number.isFinite(total) || total <= 0) return 0
+  return session.currentTime / total
 }
 
 /** LocalMediaProgress.updateFromPlaybackSession (LocalMediaProgress.kt:44-50): an existing local progress takes the session's position */

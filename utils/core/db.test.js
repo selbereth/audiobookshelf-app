@@ -242,6 +242,24 @@ const tests = {
     assert.strictEqual(item.coverAbsolutePath, null)
     assert.strictEqual(item.coverContentUrl, null)
   },
+  async 'playback progress: no usable total duration is progress 0 and not finished (not Infinity)'() {
+    const base = { id: 'l1', progress: 0, currentTime: 0, isFinished: false, lastUpdate: 1, finishedAt: null }
+    const session = (audioTracks, currentTime) => ({ audioTracks, currentTime, updatedAt: 500 })
+    for (const audioTracks of [[{ duration: null }], [{}], [{ duration: 0 }], [], [{ duration: 0 }, { duration: null }]]) {
+      const p = rules.applyPlaybackSession(base, session(audioTracks, 10))
+      assert.strictEqual(p.progress, 0, JSON.stringify(audioTracks))
+      assert.strictEqual(p.isFinished, false, JSON.stringify(audioTracks))
+      assert.strictEqual(p.finishedAt, null)
+    }
+  },
+  async 'playback progress: 99 of 100 is finished, 98.9 of 100 is not'() {
+    const base = { id: 'l1', progress: 0, currentTime: 0, isFinished: false, lastUpdate: 1, finishedAt: null }
+    const session = (currentTime) => ({ audioTracks: [{ duration: 100 }], currentTime, updatedAt: 500 })
+    const done = rules.applyPlaybackSession(base, session(99))
+    assert.strictEqual(done.isFinished, true)
+    assert.strictEqual(done.finishedAt, 500)
+    assert.strictEqual(rules.applyPlaybackSession(base, session(98.9)).isFinished, false)
+  },
   async 'finished rules'() {
     const base = { progress: 0.4, currentTime: 40, isFinished: false, lastUpdate: 1, finishedAt: null }
     const done = rules.applyIsFinished(base, true, 99)
