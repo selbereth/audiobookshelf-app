@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
   <files-path name="downloads" path="downloads/" />
+  <!-- Debug logs share: only the zip folder of the cache (see DebugLog.buildShareZip) -->
+  <cache-path name="debug-logs" path="debug-logs/" />
 </paths>

@@ -26,8 +26,12 @@ import com.audiobookshelf.app.plugins.AbsDatabase
 import com.audiobookshelf.app.plugins.AbsDownloader
 import com.audiobookshelf.app.plugins.AbsFileSystem
 import com.audiobookshelf.app.plugins.AbsLogger
+import com.audiobookshelf.app.plugins.AbsDebugLog
 import com.audiobookshelf.app.plugins.AbsTts
 import com.getcapacitor.BridgeActivity
+import com.getcapacitor.BridgeWebChromeClient
+import com.audiobookshelf.app.debug.DebugLog
+import android.webkit.ConsoleMessage
 import com.getcapacitor.WebViewListener
 import android.webkit.RenderProcessGoneDetail
 
@@ -56,6 +60,7 @@ class MainActivity : BridgeActivity() {
     registerPlugin(AbsLogger::class.java)
     registerPlugin(AbsTts::class.java)
     registerPlugin(AbsCore::class.java)
+    registerPlugin(AbsDebugLog::class.java)
 
     super.onCreate(savedInstanceState)
     Log.d(tag, "onCreate")
@@ -114,6 +119,15 @@ class MainActivity : BridgeActivity() {
         return true
       }
     })
+
+    // The console of this web view reaches the debug logs in release builds too. Capacitor drops it there (its loggingBehavior
+    // defaults to debug), so the console is forwarded here. In debug builds DebugLog.console does nothing (logcat has it).
+    bridge.webView.webChromeClient = object : BridgeWebChromeClient(bridge) {
+      override fun onConsoleMessage(m: ConsoleMessage): Boolean {
+        DebugLog.console(m.message() ?: "", m.sourceId() ?: "", m.lineNumber())
+        return super.onConsoleMessage(m)
+      }
+    }
   }
 
   private fun requestNeededPermissions() {
