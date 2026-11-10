@@ -165,6 +165,37 @@ test('a book that is gone, and a hello right after opening, are answered sensibl
   assert.strictEqual(sent.length, 1)
 })
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+test('the app opening and the watch hello together send the status once', async () => {
+  for (const order of ['opened-first', 'hello-first']) {
+    sent.length = 0
+    const { native } = fakeNative()
+    const audioState = native.audio.state
+    native.audio.state = async () => { await wait(50); return audioState() } // the status takes a while to read
+    const hub = createHub(native)
+    const calls = order === 'opened-first'
+      ? [hub.opened(), hub.handle(cmd(CMD.HELLO))]
+      : [hub.handle(cmd(CMD.HELLO)), hub.opened()]
+    await Promise.all(calls)
+    hub.closed()
+    assert.strictEqual(sent.length, 1, order + ': ' + sent.length + ' messages')
+  }
+})
+
+test('a command is answered once: the watcher does not send the same state again', async () => {
+  sent.length = 0
+  const { native, state } = fakeNative()
+  native.audio.playPause = async () => { state.audio.playing = !state.audio.playing; return {} }
+  const hub = createHub(native)
+  await hub.opened() // sends PLAYING and starts the watcher
+  await wait(1100) // the watcher takes PLAYING as its baseline
+  await hub.handle(cmd(CMD.PLAY_PAUSE)) // answered PAUSED, once
+  await wait(1100)
+  hub.closed()
+  assert.deepStrictEqual(sent.map((m) => m.State), [STATE.PLAYING, STATE.PAUSED])
+})
+
 let failed = 0
 ;(async () => {
 for (const [name, fn] of tests) {

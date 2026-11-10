@@ -59,6 +59,11 @@ export function createHub(native, { log = () => {}, now = () => Date.now() } = {
     lastSentAt = now()
     await native.pebble.send(items)
   }
+  /** A status sent to the watch is also the watcher's baseline, so the watcher does not send the same change again */
+  const sendStatus = async (s) => {
+    lastWatched = s
+    await send(statusItems(s))
+  }
 
   const statusItems = (s) => [
     [KEY.State.id, 'u8', s.state],
@@ -358,8 +363,8 @@ export function createHub(native, { log = () => {}, now = () => Date.now() } = {
 
   async function answer(result) {
     if (result.list) return send(listItems(result.list))
-    await send(statusItems(result.status))
-    if (result.status.state === STATE.LOADING) await send(statusItems(await awaitPlaying(result.status.kind)))
+    await sendStatus(result.status)
+    if (result.status.state === STATE.LOADING) await sendStatus(await awaitPlaying(result.status.kind))
   }
 
   /** @param {Object<string, number|string>} message the watch's message, by key number */
@@ -367,7 +372,10 @@ export function createHub(native, { log = () => {}, now = () => Date.now() } = {
     const command = message[KEY.Command.id]
     if (command === undefined) return
     // The status was just sent when the watchapp opened: the watch's own hello needs no second copy (it would refuse it)
-    if (command === CMD.HELLO && now() - lastSentAt < HELLO_DEDUPE_MS) return
+    if (command === CMD.HELLO) {
+      if (now() - lastSentAt < HELLO_DEDUPE_MS) return
+      lastSentAt = now() // set before the status is read, so an opened() that arrives meanwhile does not send it again
+    }
     const args = {
       level: message[KEY.ListLevel.id] ?? 0,
       shelf: message[KEY.ArgShelf.id] ?? 0,
@@ -407,7 +415,11 @@ export function createHub(native, { log = () => {}, now = () => Date.now() } = {
 
   /** The watchapp was opened */
   async function opened() {
-    await send(statusItems(await status()))
+    // The watch's hello may already have sent it (both set lastSentAt before they read the player)
+    if (now() - lastSentAt >= HELLO_DEDUPE_MS) {
+      lastSentAt = now()
+      await sendStatus(await status())
+    }
     watch()
   }
 
