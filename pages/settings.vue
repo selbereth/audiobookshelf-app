@@ -396,7 +396,8 @@ export default {
     debugLogsSummary() {
       if (!this.debugLogs.days) return this.$strings.LabelDebugLogsNone
       const megabytes = (this.debugLogs.bytes / (1024 * 1024)).toFixed(1)
-      return this.$getString('LabelDebugLogsStored', [this.debugLogs.days, megabytes])
+      const form = new Intl.PluralRules(this.$languageCodes.current).select(this.debugLogs.days) === 'one' ? 'One' : 'Other'
+      return this.$getString(`LabelDebugLogsStored${form}`, [this.debugLogs.days, megabytes])
     },
     jumpForwardSecondsOptions() {
       return this.$store.state.globals.jumpForwardSecondsOptions || []
