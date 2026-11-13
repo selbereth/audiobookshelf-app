@@ -171,6 +171,11 @@ class AbsAudioPlayerWeb extends WebPlugin {
     return false
   }
 
+  // PluginMethod (web has no background service: nothing can be playing without this page)
+  async getPlaybackSession() {
+    return { session: null }
+  }
+
   initializePlayer() {
     if (document.getElementById('audio-player')) {
       document.getElementById('audio-player').remove()

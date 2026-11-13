@@ -1003,6 +1003,12 @@ export default {
     // When a playback session is started the native android/ios will send the session
     onPlaybackSession(playbackSession) {
       console.log('onPlaybackSession received', JSON.stringify(playbackSession))
+      // The same session again (the screen asks for the open one when it starts or comes back): only keep the newest copy
+      if (this.playbackSession && playbackSession && this.playbackSession.id === playbackSession.id) {
+        this.playbackSession = playbackSession
+        this.$store.commit('setPlaybackSession', this.playbackSession)
+        return
+      }
       this.playbackSession = playbackSession
 
       this.isEnded = false
@@ -1054,6 +1060,13 @@ export default {
         else if (data?.kind === 'success') this.showProgressSyncSuccess()
       })
       AbsAudioPlayer.addListener('onPlaybackSpeedChanged', this.onPlaybackSpeedChanged)
+      // A book may already be playing (started from the watch with no screen open): after the listeners are set, ask for it
+      try {
+        const { session } = await AbsAudioPlayer.getPlaybackSession()
+        if (session && !this.playbackSession) this.onPlaybackSession(session)
+      } catch (e) {
+        console.log('getPlaybackSession failed', e?.message || e)
+      }
     },
     async screenOrientationChange() {
       if (this.isRefreshingUI) return

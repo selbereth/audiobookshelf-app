@@ -306,6 +306,27 @@ class AbsAudioPlayer : Plugin() {
     }
   }
 
+  /**
+   * The playback session the service has open, or null. A session started without the app's screen (the Pebble watch) is only
+   * announced to the screen when the screen is listening; the screen asks for it when it starts, so it always shows the player.
+   */
+  @PluginMethod
+  fun getPlaybackSession(call: PluginCall) {
+    Handler(Looper.getMainLooper()).post {
+      val session = if (::playerNotificationService.isInitialized) playerNotificationService.currentPlaybackSession else null
+      val ret = JSObject()
+      ret.put("session", if (session == null) JSONObject.NULL else JSONObject(jacksonMapper.writeValueAsString(session)))
+      call.resolve(ret)
+      // The screen also needs the state the session was announced with (loading done, playing or paused): send it after the reply
+      if (session != null) {
+        Handler(Looper.getMainLooper()).post {
+          playerNotificationService.sendClientMetadata(PlayerState.READY)
+          playerNotificationService.clientEventEmitter?.onPlayingUpdate(playerNotificationService.currentPlayer.isPlaying)
+        }
+      }
+    }
+  }
+
   @PluginMethod
   fun pausePlayer(call: PluginCall) {
     Handler(Looper.getMainLooper()).post {
