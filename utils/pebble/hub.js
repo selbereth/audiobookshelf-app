@@ -196,7 +196,10 @@ export function createHub(native, { log = () => {}, now = () => Date.now() } = {
       await native.tts.playPause()
       return status()
     }
+    // Nothing loaded and no book played before: nothing to resume, so nothing is started (and no failure is shown)
+    if (!audio.session) return withVolume(audioStatus(audio))
     if (!(audio.live && audio.playing)) await native.tts.pause()
+    // Not loaded (the app was closed, or the book failed to load): the primitive loads the book played last and starts it
     const result = await native.audio.playPause()
     if (result.error) return errorStatus(result.error)
     if (result.loading) return loadingStatus(result.title || '', KIND.AUDIO, Math.round(audio.speed * 100))
@@ -408,7 +411,10 @@ export function createHub(native, { log = () => {}, now = () => Date.now() } = {
     if (result.status.state === STATE.LOADING) await sendStatus(await awaitPlaying(result.status.kind))
   }
 
-  /** @param {Object<string, number|string>} message the watch's message, by key number */
+  /**
+   * @param {Object<string, number|string>} message the watch's message, by key number. Each message is handled on its own, in the
+   * order it arrives, whatever came before it: a play/pause before the watch's hello is answered like any other.
+   */
   async function handle(message) {
     const command = message[KEY.Command.id]
     if (command === undefined) return
@@ -423,7 +429,13 @@ export function createHub(native, { log = () => {}, now = () => Date.now() } = {
       item: message[KEY.ArgItem.id] ?? 0,
       format: message[KEY.ArgFormat.id] ?? FORMAT_ASK
     }
-    await answer(await run(command, args))
+    try {
+      await answer(await run(command, args))
+    } catch (error) {
+      // A failed primitive still gets an answer: the watch shows the failure at once instead of "No answer" after its timeout
+      log('command failed', error)
+      await sendStatus(errorStatus('Could not do that. Try again'))
+    }
   }
 
   /**

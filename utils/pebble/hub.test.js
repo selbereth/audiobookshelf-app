@@ -196,6 +196,57 @@ test('a command is answered once: the watcher does not send the same state again
   assert.deepStrictEqual(sent.map((m) => m.State), [STATE.PLAYING, STATE.PAUSED])
 })
 
+test('play/pause with nothing loaded resumes the book played last, and starts nothing else', async () => {
+  sent.length = 0
+  const { native, calls, state } = fakeNative()
+  state.audio = { live: false, playing: false, speed: 1, lastUpdatedAt: 0, session: { title: 'Last Book', duration: 600, chapters: [] } }
+  native.audio.playPause = async () => {
+    calls.push(['audio.playPause'])
+    state.audio.live = true
+    state.audio.playing = true // what the page's primitive does: load the book played last and start it
+    return { loading: true, title: 'Last Book' }
+  }
+  await createHub(native).handle(cmd(CMD.PLAY_PAUSE))
+  const names = calls.map((c) => c[0])
+  assert.strictEqual(names.filter((n) => n === 'audio.playPause').length, 1)
+  assert.ok(!names.includes('audio.start') && !names.includes('audio.jump'))
+  assert.deepStrictEqual(sent.map((m) => m.State), [STATE.LOADING, STATE.PLAYING])
+  assert.strictEqual(sent[0].Title, 'Last Book')
+})
+
+test('play/pause with nothing to resume answers a no-book status and starts nothing', async () => {
+  sent.length = 0
+  const { native, calls, state } = fakeNative()
+  state.audio = { live: false, playing: false, speed: 1, lastUpdatedAt: 0, session: null }
+  await createHub(native).handle(cmd(CMD.PLAY_PAUSE))
+  const names = calls.map((c) => c[0])
+  assert.ok(!names.includes('audio.playPause') && !names.includes('audio.start') && !names.includes('tts.resume') && !names.includes('tts.startNew'))
+  assert.deepStrictEqual(sent.map((m) => m.State), [STATE.NOTHING_TO_PLAY])
+})
+
+test('a play/pause before the watch hello is answered; the hello after it is not sent again', async () => {
+  sent.length = 0
+  const { native, calls, state } = fakeNative()
+  native.audio.playPause = async () => {
+    calls.push(['audio.playPause'])
+    state.audio.playing = false
+    return {}
+  }
+  const hub = createHub(native, { now: () => 0 })
+  await hub.handle(cmd(CMD.PLAY_PAUSE))
+  await hub.handle(cmd(CMD.HELLO))
+  assert.strictEqual(calls.filter((c) => c[0] === 'audio.playPause').length, 1)
+  assert.deepStrictEqual(sent.map((m) => m.State), [STATE.PAUSED])
+})
+
+test('a failing primitive is answered with an error at once, not left to the watch timeout', async () => {
+  sent.length = 0
+  const { native } = fakeNative()
+  native.audio.playPause = async () => { throw new Error('boom') }
+  await createHub(native).handle(cmd(CMD.PLAY_PAUSE))
+  assert.deepStrictEqual(sent.map((m) => m.State), [STATE.ERROR])
+})
+
 // --- The shelves: answered from memory, refreshed in the background, one load at a time ---
 
 /** A server whose shelves can be changed, slowed (gate) or made to fail between the tests */
