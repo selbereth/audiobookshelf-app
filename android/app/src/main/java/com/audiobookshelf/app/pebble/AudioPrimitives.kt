@@ -7,12 +7,16 @@ import android.content.ServiceConnection
 import android.os.IBinder
 import android.util.Log
 import com.audiobookshelf.app.data.LocalLibraryItem
+import com.audiobookshelf.app.data.LocalMediaProgress
+import com.audiobookshelf.app.data.MediaProgress
 import com.audiobookshelf.app.data.PlaybackSession
 import com.audiobookshelf.app.data.Podcast
 import com.audiobookshelf.app.data.PodcastEpisode
 import com.audiobookshelf.app.device.DeviceManager
+import com.audiobookshelf.app.media.MediaEventManager
 import com.audiobookshelf.app.player.PlayerListener
 import com.audiobookshelf.app.player.PlayerNotificationService
+import com.audiobookshelf.app.plugins.AbsLogger
 import com.audiobookshelf.app.server.ApiHandler
 import com.google.android.exoplayer2.Player
 import kotlinx.coroutines.Dispatchers
@@ -153,6 +157,7 @@ class AudioPrimitives(private val context: Context) {
           episode = (localItem.media as? Podcast)?.episodes?.find { it.id == localEpisodeId }
         }
         if (!localItem.hasTracks(context, episode)) return error("Audio files are missing: download the book again")
+        useNewerServerProgress(localItem, episode)
         withContext(Dispatchers.Main) {
           val session = localItem.getPlaybackSession(episode, service.getDeviceInfo())
           service.mediaProgressSyncer.reset()
@@ -209,7 +214,54 @@ class AudioPrimitives(private val context: Context) {
 
   private fun error(message: String) = JSONObject().put("error", message)
 
+  /**
+   * Before a downloaded book starts: the server's progress for it is written to the local progress when it is newer (a newer
+   * lastUpdate wins, as in the core's startup sync), so the session built from the local progress starts there. It never blocks
+   * or fails the start: when the server cannot be asked, the local progress is used as it is.
+   */
+  private suspend fun useNewerServerProgress(localItem: LocalLibraryItem, episode: PodcastEpisode?) {
+    fun couldNot(why: String) = AbsLogger.info(tag, "Pebble start: could not check the server ($why), using local progress")
+    try {
+      val libraryItemId = localItem.libraryItemId
+      if (libraryItemId.isNullOrEmpty()) return couldNot("not linked to a server")
+      val config = DeviceManager.getServerConnectionConfig(localItem.serverConnectionConfigId) ?: return couldNot("not logged in to its server")
+      if (!DeviceManager.checkConnectivity(context)) return couldNot("offline")
+      val episodeId = episode?.serverEpisodeId
+      val mediaProgressId = if (episode == null) localItem.id else "${localItem.id}-${episode.id}"
+      val local = DeviceManager.dbManager.getLocalMediaProgress(mediaProgressId)
+      val server = withTimeoutOrNull(SERVER_CHECK_TIMEOUT_MS) {
+        suspendCancellableCoroutine<MediaProgress?> { cont ->
+          ApiHandler(context).getMediaProgress(libraryItemId, episodeId, config) { if (cont.isActive) cont.resume(it) }
+        }
+      } ?: return couldNot("no answer in time or an error")
+      val localUpdate = local?.lastUpdate ?: 0L
+      if (server.lastUpdate <= localUpdate) return AbsLogger.info(tag, "Pebble start: local progress is current")
+      AbsLogger.info(tag, "Pebble start: server progress is newer (${server.lastUpdate} vs $localUpdate), using it")
+      // The startup sync's write: the server progress is applied to the local row (created when there is none)
+      val progress = local ?: LocalMediaProgress(
+        id = mediaProgressId, localLibraryItemId = localItem.id, localEpisodeId = episode?.id, duration = server.duration, progress = 0.0,
+        currentTime = 0.0, isFinished = false, ebookLocation = null, ebookProgress = null, lastUpdate = 0L, startedAt = 0L, finishedAt = null,
+        serverConnectionConfigId = localItem.serverConnectionConfigId, serverAddress = localItem.serverAddress, serverUserId = localItem.serverUserId,
+        libraryItemId = libraryItemId, episodeId = episodeId
+      )
+      progress.currentTime = server.currentTime
+      progress.progress = server.progress
+      progress.isFinished = server.isFinished
+      progress.duration = server.duration
+      progress.ebookLocation = server.ebookLocation
+      progress.ebookProgress = server.ebookProgress
+      progress.lastUpdate = server.lastUpdate
+      progress.startedAt = server.startedAt
+      progress.finishedAt = server.finishedAt
+      MediaEventManager.syncEvent(server, "Sync on server connection")
+      DeviceManager.dbManager.saveLocalMediaProgress(progress)
+    } catch (e: Exception) {
+      couldNot(e.message ?: "failed")
+    }
+  }
+
   private companion object {
     const val WAIT_SECONDS = 20
+    const val SERVER_CHECK_TIMEOUT_MS = 4000L
   }
 }
