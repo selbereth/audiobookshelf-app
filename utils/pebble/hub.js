@@ -35,6 +35,8 @@ import { CMD, FORMAT_ASK, KEY, KIND, LEVEL, LIST_PAGE_SIZE, MAX_LABEL_LENGTH, MA
 const PROGRESS_STEP_SECONDS = 20 // the bar on the watch moves in steps of this size
 const HELLO_DEDUPE_MS = 2000
 const TTS_WAIT_SECONDS = 45
+/** The shelves are answered from memory for this long; an open after it also starts a refresh (in the background) */
+export const SHELVES_TTL_MS = 30000
 
 const FORMAT = { AUDIO: 'audio', EPUB: 'epub' }
 
@@ -46,8 +48,10 @@ const formatsOf = (book) => [...(book.hasAudio ? [FORMAT.AUDIO] : []), ...(book.
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export function createHub(native, { log = () => {}, now = () => Date.now() } = {}) {
-  let shelves = []
+  let shelves = [] // what the lists show: the server's shelves, then the downloads
+  let serverCache = null // { libraryId, server: [shelf], at } from the last load that worked; null until one has
   let localBooks = []
+  let refreshing = null // the load under way, shared by everyone who asks while it runs
   let starting = false // a start is under way: the player reports paused until it plays
   let lastSentAt = 0
   let lastWatched = null
@@ -225,15 +229,20 @@ export function createHub(native, { log = () => {}, now = () => Date.now() } = {
 
   // --- Choosing a book: the shelves of the home screen, then the downloads ---
 
-  async function serverShelves() {
-    let libraryId = await native.api.lastLibraryId()
-    if (!libraryId) {
-      const libraries = await native.api.get('/api/libraries')
-      libraryId = libraries.ok && (libraries.json.libraries || []).find((l) => l.mediaType === 'book')?.id
-    }
+  /** The library the signed-in server keeps its books in: the last one used, else the first book library */
+  async function resolveLibraryId() {
+    const last = await native.api.lastLibraryId()
+    if (last) return last
+    const libraries = await native.api.get('/api/libraries')
+    if (!libraries.ok) throw new Error('Could not list the libraries')
+    return (libraries.json.libraries || []).find((l) => l.mediaType === 'book')?.id || null
+  }
+
+  /** The book shelves of a library from the server, one request. Throws when the server does not answer (not an empty list). */
+  async function serverShelves(libraryId) {
     if (!libraryId) return []
     const response = await native.api.get(`/api/libraries/${libraryId}/personalized?minified=1`)
-    if (!response.ok || !Array.isArray(response.json)) return []
+    if (!response.ok || !Array.isArray(response.json)) throw new Error('Could not load the shelves')
     return response.json
       .filter((shelf) => shelf.type === 'book')
       .map((shelf) => ({
@@ -252,19 +261,44 @@ export function createHub(native, { log = () => {}, now = () => Date.now() } = {
       .filter((shelf) => shelf.books.length)
   }
 
-  async function refreshShelves() {
-    const loaded = []
-    try {
-      loaded.push(...(await serverShelves()))
-    } catch (error) {
-      log('Could not load the server shelves', error)
-    }
-    localBooks = await native.local.books()
+  /** The server's shelves as loaded, then the downloads: what the lists show */
+  function currentShelves() {
     const downloads = localBooks
       .filter((b) => b.hasAudio || b.hasEpub)
       .map((b) => ({ libraryItemId: b.libraryItemId || null, localLibraryItemId: b.id, title: b.title, hasAudio: b.hasAudio, hasEpub: b.hasEpub }))
-    if (downloads.length) loaded.push({ label: 'Downloaded', books: downloads })
-    shelves = loaded
+    return [...(serverCache ? serverCache.server : []), ...(downloads.length ? [{ label: 'Downloaded', books: downloads }] : [])]
+  }
+
+  const shelvesStale = () => !serverCache || now() - serverCache.at > SHELVES_TTL_MS
+
+  /** One load: the server's shelves (a failed load keeps the ones before, unless they are of another library) and the downloads */
+  async function loadShelves() {
+    try {
+      const libraryId = await resolveLibraryId()
+      if (serverCache && serverCache.libraryId !== libraryId) serverCache = null // another server or library: none of its shelves are kept
+      serverCache = { libraryId, server: await serverShelves(libraryId), at: now() }
+    } catch (error) {
+      log('Could not load the server shelves: keeping the ones loaded before', error)
+    }
+    localBooks = await native.local.books()
+  }
+
+  /** Starts a load unless one is under way; everyone who asks meanwhile waits for the same one. Never rejects. */
+  function refreshShelves() {
+    if (!refreshing) {
+      refreshing = loadShelves()
+        .catch((error) => log('Could not refresh the shelves', error))
+        .finally(() => {
+          refreshing = null
+          shelves = currentShelves()
+        })
+    }
+    return refreshing
+  }
+
+  /** Warms the shelves when the watchapp opens, so the first Books list is answered from memory */
+  function prefetchShelves() {
+    if (shelvesStale()) refreshShelves()
   }
 
   /** The rows [start] and on of [all], as many as fit one message */
@@ -279,8 +313,15 @@ export function createHub(native, { log = () => {}, now = () => Date.now() } = {
 
   async function browse(args) {
     if (args.level === LEVEL.SHELVES) {
-      // The first page of the top list is asked for when the menu opens: load the shelves again then
-      if (args.item === 0) await refreshShelves()
+      // The top list is asked for when Books is opened. Answered at once from the shelves in memory; a load that is due runs in the
+      // background, and only the very first open (nothing in memory yet) waits for it
+      if (args.item === 0) {
+        const libraryId = await native.api.lastLibraryId()
+        if (serverCache && libraryId && serverCache.libraryId !== libraryId) serverCache = null // the server changed: its shelves are not shown
+        if (!serverCache) await refreshShelves()
+        else if (shelvesStale()) refreshShelves()
+        shelves = currentShelves()
+      }
       return { list: page(LEVEL.SHELVES, shelves.map((s) => s.label), args.item) }
     }
     if (args.level === LEVEL.BOOKS) return { list: page(LEVEL.BOOKS, (shelves[args.shelf]?.books || []).map((b) => b.title), args.item) }
@@ -421,6 +462,7 @@ export function createHub(native, { log = () => {}, now = () => Date.now() } = {
       await sendStatus(await status())
     }
     watch()
+    prefetchShelves()
   }
 
   function closed() {

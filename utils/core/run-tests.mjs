@@ -7,11 +7,14 @@ import { fileURLToPath } from 'url'
 import { spawnSync } from 'child_process'
 
 const dir = dirname(fileURLToPath(import.meta.url))
+const pebbleDir = join(dir, '..', 'pebble') // the watch's hub tests run here too
 const out = mkdtempSync(join(tmpdir(), 'core-tests-'))
 let failed = false
-for (const f of readdirSync(dir).filter((f) => f.endsWith('.test.js'))) {
+const files = [...readdirSync(dir).map((f) => join(dir, f)), ...readdirSync(pebbleDir).map((f) => join(pebbleDir, f))].filter((f) => f.endsWith('.test.js'))
+for (const path of files) {
+  const f = path.split('/').slice(-1)[0]
   const outfile = join(out, f.replace('.test.js', '.js'))
-  await build({ entryPoints: [join(dir, f)], bundle: true, platform: 'node', format: 'esm', target: 'node18', outfile: outfile.replace(/\.js$/, '.mjs'), logLevel: 'error' })
+  await build({ entryPoints: [path], bundle: true, platform: 'node', format: 'esm', target: 'node18', outfile: outfile.replace(/\.js$/, '.mjs'), logLevel: 'error' })
   console.log('--- ' + f)
   const r = spawnSync('node', [outfile.replace(/\.js$/, '.mjs')], { stdio: 'inherit' })
   if (r.status !== 0) failed = true

@@ -3,7 +3,7 @@
  * The hub is plain JavaScript over a `native` object, so it is tested here with a made-up one.
  */
 import assert from 'assert'
-import { createHub, nextSpeed } from './hub'
+import { createHub, nextSpeed, SHELVES_TTL_MS } from './hub'
 import { CMD, KEY, STATE, KIND, LEVEL } from './protocol'
 
 const sent = []
@@ -115,7 +115,7 @@ test('starting read aloud pauses the audiobook first; a closed app resumes from 
   await task
   assert.deepStrictEqual(calls.map((c) => c[0]).slice(0, 2), ['audio.pause', 'tts.resume'])
   assert.deepStrictEqual(sent.map((m) => m.State), [STATE.LOADING, STATE.PLAYING])
-}).timeout = 5000
+})
 
 test('browse: shelves, books, long labels cut, series and unplayable shelves left out, downloads last', async () => {
   sent.length = 0
@@ -194,6 +194,107 @@ test('a command is answered once: the watcher does not send the same state again
   await wait(1100)
   hub.closed()
   assert.deepStrictEqual(sent.map((m) => m.State), [STATE.PLAYING, STATE.PAUSED])
+})
+
+// --- The shelves: answered from memory, refreshed in the background, one load at a time ---
+
+/** A server whose shelves can be changed, slowed (gate) or made to fail between the tests */
+function shelvesNative() {
+  const { native, calls } = fakeNative()
+  const server = { libraryId: 'lib1', label: 'Continue Listening', fail: false, gate: null }
+  const get = native.api.get
+  native.api.get = async (path) => {
+    if (!path.includes('/personalized')) return get(path)
+    calls.push(['personalized', path])
+    if (server.gate) await server.gate
+    if (server.fail) return { ok: false }
+    return { ok: true, json: [{ type: 'book', label: server.label, entities: [{ id: 'a', mediaType: 'book', media: { metadata: { title: 'Book A' }, numTracks: 3 } }] }] }
+  }
+  native.api.lastLibraryId = async () => server.libraryId
+  return { native, calls, server }
+}
+const openShelves = (hub) => hub.handle(cmd(CMD.BROWSE, { [KEY.ListLevel.id]: LEVEL.SHELVES, [KEY.ArgItem.id]: 0 }))
+const fetches = (calls) => calls.filter((c) => c[0] === 'personalized').length
+
+test('a cached open is answered at once, without waiting for the refresh; the refresh shows at the next open', async () => {
+  sent.length = 0
+  const { native, server } = shelvesNative()
+  let t = 0
+  const hub = createHub(native, { now: () => t })
+  await openShelves(hub) // nothing in memory yet: this one waits
+  assert.strictEqual(sent[0].List, 'Continue Listening\nDownloaded')
+  t = SHELVES_TTL_MS + 1 // stale now
+  server.label = 'Discover'
+  let release
+  server.gate = new Promise((resolve) => (release = resolve))
+  sent.length = 0
+  const winner = await Promise.race([openShelves(hub).then(() => 'answered'), wait(200).then(() => 'waited')])
+  assert.strictEqual(winner, 'answered')
+  assert.strictEqual(sent[0].List, 'Continue Listening\nDownloaded')
+  server.gate = null
+  release()
+  await wait(10)
+  sent.length = 0
+  await openShelves(hub)
+  assert.strictEqual(sent[0].List, 'Discover\nDownloaded')
+})
+
+test('concurrent opens and the watchapp opening share one fetch', async () => {
+  const { native, calls } = shelvesNative()
+  const hub = createHub(native)
+  await Promise.all([hub.opened(), openShelves(hub), openShelves(hub), hub.handle(cmd(CMD.HELLO))])
+  assert.strictEqual(fetches(calls), 1)
+  hub.closed()
+})
+
+test('a stale cache starts one background refresh on open', async () => {
+  const { native, calls } = shelvesNative()
+  let t = 0
+  const hub = createHub(native, { now: () => t })
+  await openShelves(hub)
+  assert.strictEqual(fetches(calls), 1)
+  t = SHELVES_TTL_MS + 1
+  await openShelves(hub)
+  await wait(10)
+  assert.strictEqual(fetches(calls), 2)
+  t = SHELVES_TTL_MS + 2 // fresh again: no new request
+  await openShelves(hub)
+  await wait(10)
+  assert.strictEqual(fetches(calls), 2)
+})
+
+test('a failed refresh keeps the shelves in memory and logs it', async () => {
+  sent.length = 0
+  const { native, server } = shelvesNative()
+  let t = 0
+  const logs = []
+  const hub = createHub(native, { now: () => t, log: (...args) => logs.push(args[0]) })
+  await openShelves(hub)
+  t = SHELVES_TTL_MS + 1
+  server.fail = true
+  await openShelves(hub)
+  await wait(10)
+  sent.length = 0
+  await openShelves(hub)
+  assert.strictEqual(sent[0].List, 'Continue Listening\nDownloaded')
+  assert.ok(logs.some((m) => String(m).includes('keeping')))
+})
+
+test('a server change drops the old shelves: a failed load of the new server shows no old rows', async () => {
+  sent.length = 0
+  const { native, server } = shelvesNative()
+  let t = 0
+  const hub = createHub(native, { now: () => t })
+  await openShelves(hub)
+  server.libraryId = 'lib2'
+  server.fail = true
+  await openShelves(hub) // a change of library is seen at once: this open waits for the (failed) load
+  assert.strictEqual(sent[sent.length - 1].List, 'Downloaded')
+  server.fail = false
+  server.label = 'Server two shelf'
+  sent.length = 0
+  await openShelves(hub)
+  assert.strictEqual(sent[0].List, 'Server two shelf\nDownloaded')
 })
 
 let failed = 0
