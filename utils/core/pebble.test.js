@@ -1,7 +1,7 @@
 import assert from 'assert'
 import { execSync } from 'child_process'
 import { createBridge } from './bridge'
-import { pebbleModule, shouldNudge, needsReload, pickServerConfig, WAIT_SECONDS } from './modules/pebble'
+import { pebbleModule, shouldNudge, needsReload, pickServerConfig, WAIT_SECONDS, SERVER_CHECK_TIMEOUT_MS } from './modules/pebble'
 
 // Every rule quotes the Kotlin line it ports, from the master commit (the base of this phase). `quote` finds the line by its text and
 // checks it, so a quoted line that drifts from the source fails the test. The line is printed in the test output.
@@ -28,6 +28,8 @@ function world(over = {}) {
     connected: true,
     data: { serverConnectionConfigs: [{ id: 'c1', address: 'http://a', token: 't1' }], lastServerConnectionConfigId: 'c1', lastPlaybackSession: null },
     locals: {},
+    progress: {},
+    hang: false,
     srv: { address: 'http://a', token: 't1', serverConnectionConfigId: 'c1' },
     playItem: { id: 's1', displayTitle: 'Server book' },
     loadLocal: { ok: true },
@@ -63,15 +65,24 @@ function world(over = {}) {
     resolveServer: async () => w.srv,
     request: async ({ endpoint }) => {
       w.calls.push('api.request ' + endpoint)
+      if (w.hang) return new Promise(() => {})
       return w.requests[endpoint] || { error: 'Unexpected code 404' }
     }
   }
   const db = {
     methods: {
       getDeviceData: async () => w.data,
-      getLocalLibraryItem: async ({ id }) => w.locals[id] || {}
-    }
+      getLocalLibraryItem: async ({ id }) => w.locals[id] || {},
+      syncServerMediaProgressWithLocalMediaProgress: async (a) => { w.calls.push('db.syncServerMediaProgress ' + a.localLibraryItemId); return {} }
+    },
+    store: {
+      get: async (collection, key) => (collection === 'localMediaProgress' ? w.progress[key] || null : null),
+      put: async (collection, key, value) => { w.calls.push('store.put ' + collection + ' ' + key); if (collection === 'localMediaProgress') w.progress[key] = value }
+    },
+    serial: async (fn) => fn(),
+    addSyncEvent: async () => { w.calls.push('db.addSyncEvent') }
   }
+  const logs = []
   const server = {
     playItem: async (a) => {
       w.calls.push('server.playItem ' + a.libraryItemId + ' ' + a.address)
@@ -79,11 +90,19 @@ function world(over = {}) {
     }
   }
   const sleeps = []
-  const mod = pebbleModule(bridge, { api, server, db, sleep: async (ms) => sleeps.push(ms) })
-  return { w, bridge, mod, sleeps, has: (s) => w.calls.some((c) => c.startsWith(s)) }
+  const mod = pebbleModule(bridge, { api, server, db, sleep: async (ms) => sleeps.push(ms), log: (m) => logs.push(m) })
+  return { w, bridge, mod, sleeps, logs, has: (s) => w.calls.some((c) => c.startsWith(s)) }
 }
 
 const lastBook = { displayTitle: 'Last', libraryItemId: 'li1', episodeId: null, serverConnectionConfigId: 'c1', localLibraryItem: null, localEpisodeId: null, currentTime: 10, updatedAt: 500 }
+
+// A downloaded book linked to server item li1 (config c1), with local progress at 10 s, last updated at 100
+const linked = (over = {}) => world({
+  locals: { d1: { id: 'd1', libraryItemId: 'li1', serverConnectionConfigId: 'c1', media: {} } },
+  progress: { d1: { id: 'd1', libraryItemId: 'li1', episodeId: null, serverConnectionConfigId: 'c1', currentTime: 10, lastUpdate: 100, isFinished: false, progress: 0.1, duration: 100 } },
+  ...over
+})
+const serverAt = (lastUpdate, currentTime = 300) => ({ id: 'mp1', libraryItemId: 'li1', episodeId: null, currentTime, lastUpdate, isFinished: false, progress: currentTime / 100, duration: 100, startedAt: 1, finishedAt: null })
 
 const tests = {
   'WAIT_SECONDS is 20 (AudioPrimitives awaitPlaying)': async () => {
@@ -212,6 +231,76 @@ const tests = {
     const { mod, has } = world({ state: { live: true, loaded: false } })
     await mod.native.audio.jump(true)
     assert.ok(!has('player.jump'))
+  },
+
+  'a downloaded book takes the newer server progress before it is loaded': async () => {
+    const { mod, w, logs } = linked({ requests: { '/api/me/progress/li1': serverAt(500) } })
+    const r = await mod.native.audio.start({ localLibraryItemId: 'd1' })
+    assert.deepEqual(r, { loading: true, title: '' })
+    const at = (c) => w.calls.findIndex((x) => x.startsWith(c))
+    assert.ok(at('api.request /api/me/progress/li1') >= 0)
+    assert.ok(at('store.put localMediaProgress d1') > -1 && at('store.put localMediaProgress d1') < at('player.loadLocal'))
+    assert.equal(w.progress.d1.currentTime, 300)
+    assert.equal(w.progress.d1.lastUpdate, 500)
+    assert.ok(w.calls.includes('db.addSyncEvent'))
+    assert.ok(logs.includes('Pebble start: server progress is newer (500 vs 100), using it'))
+  },
+
+  'the server progress is not written when the local one is as new or newer': async () => {
+    for (const lastUpdate of [100, 50]) {
+      const { mod, w, logs, has } = linked({ requests: { '/api/me/progress/li1': serverAt(lastUpdate, 999) } })
+      await mod.native.audio.start({ localLibraryItemId: 'd1' })
+      assert.ok(!w.calls.some((c) => c.startsWith('store.put')))
+      assert.equal(w.progress.d1.currentTime, 10)
+      assert.ok(has('player.loadLocal'))
+      assert.deepEqual(logs, ['Pebble start: local progress is current'])
+    }
+  },
+
+  'a server error or a missing answer starts from the local progress, with one log line': async () => {
+    const { mod, w, logs, has } = linked({ requests: { '/api/me/progress/li1': { error: 'Unexpected code 404' } } })
+    assert.deepEqual(await mod.native.audio.start({ localLibraryItemId: 'd1' }), { loading: true, title: '' })
+    assert.ok(has('player.loadLocal'))
+    assert.equal(w.progress.d1.currentTime, 10)
+    assert.deepEqual(logs, ['Pebble start: could not check the server (Unexpected code 404), using local progress'])
+  },
+
+  'a server that does not answer in time starts from the local progress': async () => {
+    const { mod, w, logs, has } = linked({ hang: true })
+    const t0 = Date.now()
+    assert.deepEqual(await mod.native.audio.start({ localLibraryItemId: 'd1' }), { loading: true, title: '' })
+    const took = Date.now() - t0
+    assert.ok(took >= SERVER_CHECK_TIMEOUT_MS - 50 && took < SERVER_CHECK_TIMEOUT_MS + 2000, 'took ' + took + ' ms')
+    assert.ok(has('player.loadLocal'))
+    assert.ok(!w.calls.some((c) => c.startsWith('store.put')))
+    assert.deepEqual(logs, ['Pebble start: could not check the server (no answer in time), using local progress'])
+  },
+
+  'offline or not linked to a server: no request, start from the local progress': async () => {
+    const offline = linked({ connected: false, requests: { '/api/me/progress/li1': serverAt(500) } })
+    await offline.mod.native.audio.start({ localLibraryItemId: 'd1' })
+    assert.ok(!offline.has('api.request'))
+    assert.ok(offline.has('player.loadLocal'))
+    assert.deepEqual(offline.logs, ['Pebble start: could not check the server (offline), using local progress'])
+
+    const unlinked = world({ locals: { d1: { id: 'd1', media: {} } } })
+    await unlinked.mod.native.audio.start({ localLibraryItemId: 'd1' })
+    assert.ok(!unlinked.has('api.request'))
+    assert.ok(unlinked.has('player.loadLocal'))
+    assert.deepEqual(unlinked.logs, ['Pebble start: could not check the server (not linked to a server), using local progress'])
+
+    const noConfig = linked({ data: { serverConnectionConfigs: [], lastServerConnectionConfigId: null } })
+    await noConfig.mod.native.audio.start({ localLibraryItemId: 'd1' })
+    assert.ok(!noConfig.has('api.request'))
+    assert.ok(noConfig.has('player.loadLocal'))
+  },
+
+  'a downloaded book with no local progress takes the server progress as new': async () => {
+    const { mod, w, has } = linked({ progress: {}, requests: { '/api/me/progress/li1': serverAt(500) } })
+    await mod.native.audio.start({ localLibraryItemId: 'd1' })
+    assert.ok(has('db.syncServerMediaProgress d1'))
+    assert.ok(has('player.loadLocal'))
+    assert.ok(w.calls.findIndex((c) => c.startsWith('db.syncServerMediaProgress d1')) < w.calls.findIndex((c) => c.startsWith('player.loadLocal')))
   },
 
   'run answers pebble entry points and rejects unknown ones': async () => {

@@ -7,6 +7,12 @@
  * Native calls `pebble` / `run` {method, args} (CoreHost.callUp) for each watch message and Pebble app event.
  */
 import { createHub } from '../../pebble/hub'
+import * as rules from './dbRules'
+import { progressEndpoint } from './progress'
+
+const C = rules.COLLECTIONS
+/** The server answer for the progress before a downloaded book starts: past this the local progress is used */
+export const SERVER_CHECK_TIMEOUT_MS = 4000
 
 export const WAIT_SECONDS = 20
 export const NUDGE_LIMIT = 3
@@ -45,10 +51,62 @@ export function pebbleModule(bridge, { api, server, db, log = () => {}, now = ()
   const bound = async () => (await player('bind')).live === true
   const playerState = () => player('getState')
 
+  /** Resolves with the answer, or {error} when it is not there within SERVER_CHECK_TIMEOUT_MS */
+  function withDeadline(promise) {
+    let timer
+    const late = new Promise((resolve) => { timer = setTimeout(() => resolve({ error: 'no answer in time' }), SERVER_CHECK_TIMEOUT_MS) })
+    return Promise.race([promise, late]).then((v) => { clearTimeout(timer); return v })
+  }
+
+  /**
+   * Before a downloaded book starts: the server's progress for it is written to the local progress when it is newer (the rule of
+   * sync.js syncLocalMediaProgress: a newer lastUpdate wins), so the session built from the local progress starts there. Never
+   * blocks or fails the start: when the server cannot be asked, the local progress is used as it is.
+   */
+  async function useNewerServerProgress(localItemId, localEpisodeId) {
+    const couldNot = (why) => log('Pebble start: could not check the server (' + why + '), using local progress')
+    try {
+      const item = await localItemOf(localItemId)
+      if (!item || !item.libraryItemId) return couldNot('not linked to a server')
+      const config = ((await deviceData()).serverConnectionConfigs || []).find((c) => c.id === item.serverConnectionConfigId)
+      if (!config) return couldNot('not logged in to its server')
+      if (!(await bridge.call('system', 'network')).connected) return couldNot('offline')
+      const episode = localEpisodeId ? ((item.media && item.media.episodes) || []).find((e) => e.id === localEpisodeId) : null
+      const episodeId = (episode && episode.serverEpisodeId) || null
+      const id = rules.localMediaProgressId(item.id, localEpisodeId || null)
+      const local = await db.store.get(C.localMediaProgress, id)
+      const server = await withDeadline(api.request({
+        method: 'GET',
+        endpoint: progressEndpoint(item.libraryItemId, episodeId),
+        timeoutMs: SERVER_CHECK_TIMEOUT_MS,
+        address: config.address,
+        token: config.token,
+        serverConnectionConfigId: config.id
+      }))
+      if (!server || server.error) return couldNot((server && server.error) || 'no answer')
+      if (typeof server.lastUpdate !== 'number') return couldNot('the answer has no lastUpdate')
+      const localUpdate = (local && local.lastUpdate) || 0
+      if (!(server.lastUpdate > localUpdate)) return log('Pebble start: local progress is current')
+      log(`Pebble start: server progress is newer (${server.lastUpdate} vs ${localUpdate}), using it`)
+      if (local) {
+        // The startup sync's write (sync.js): the sync history, then the server progress applied to the local row
+        await db.serial(async () => {
+          await db.addSyncEvent(server, 'Sync on server connection')
+          await db.store.put(C.localMediaProgress, local.id, rules.applyServerProgress(local, server))
+        })
+      } else {
+        await db.methods.syncServerMediaProgressWithLocalMediaProgress({ mediaProgress: server, localLibraryItemId: item.id, localEpisodeId: localEpisodeId || '', localMediaProgressId: '' })
+      }
+    } catch (e) {
+      couldNot(e && e.message ? e.message : 'failed')
+    }
+  }
+
   /** AudioPrimitives.kt startAudio: from the download when there is one, else from the server */
   async function startAudio({ title, localItemId, localEpisodeId, libraryItemId, episodeId, serverConnectionConfigId }) {
     const playbackRate = await pebble('savedRate')
     if (localItemId) {
+      await useNewerServerProgress(localItemId, localEpisodeId)
       const r = await player('loadLocal', { localLibraryItemId: localItemId, localEpisodeId: localEpisodeId || '', playbackRate })
       if (r.ok) return { loading: true, title }
       return { error: r.reason === 'tracks' ? 'Audio files are missing: download the book again' : 'Open Audiobookshelf on the phone' }
