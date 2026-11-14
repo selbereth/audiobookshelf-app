@@ -38,7 +38,12 @@ class VolumeBoostManager {
 
   private fun apply() {
     if (boostDb <= 0 || audioSessionId == C.AUDIO_SESSION_ID_UNSET) {
-      loudnessEnhancer?.setEnabled(false)
+      try {
+        loudnessEnhancer?.setEnabled(false)
+      } catch (e: Exception) {
+        Log.e(tag, "Failed to disable volume boost", e)
+        release()
+      }
       return
     }
 
