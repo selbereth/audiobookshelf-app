@@ -67,6 +67,13 @@
       </div>
       <p class="pl-4">{{ $strings.LabelAllowSeekingOnMediaControls }}</p>
     </div>
+    <div v-if="!isiOS" class="py-3 flex items-center">
+      <p class="pr-4 w-36">{{ $strings.LabelVolumeBoost }}</p>
+      <div @click.stop="showVolumeBoostOptions">
+        <ui-text-input :value="volumeBoostOption" readonly append-icon="expand_more" style="width: 145px; max-width: 145px" />
+      </div>
+      <span class="material-symbols text-xl ml-2" @click.stop="showInfo('volumeBoost')">info</span>
+    </div>
 
     <!-- Sleep timer settings -->
     <template v-if="!isiOS">
@@ -254,7 +261,8 @@ export default {
         downloadUsingCellular: 'ALWAYS',
         streamingUsingCellular: 'ALWAYS',
         androidAutoBrowseLimitForGrouping: 100,
-        androidAutoBrowseSeriesSequenceOrder: 'ASC'
+        androidAutoBrowseSeriesSequenceOrder: 'ASC',
+        volumeBoost: 0
       },
       theme: 'dark',
       lockCurrentOrientation: false,
@@ -291,6 +299,10 @@ export default {
         androidAutoBrowseLimitForGrouping: {
           name: this.$strings.LabelAndroidAutoBrowseLimitForGrouping,
           message: this.$strings.LabelAndroidAutoBrowseLimitForGroupingHelp
+        },
+        volumeBoost: {
+          name: this.$strings.LabelVolumeBoost,
+          message: this.$strings.LabelVolumeBoostHelp
         },
         autoDeleteFinished: {
           name: this.$strings.LabelAutoDeleteFinished,
@@ -374,7 +386,8 @@ export default {
           text: this.$strings.LabelSequenceDescending,
           value: 'DESC'
         }
-      ]
+      ],
+      volumeBoostDbOptions: [0, 3, 6, 9, 12]
     }
   },
   computed: {
@@ -474,6 +487,16 @@ export default {
       const item = this.androidAutoBrowseSeriesSequenceOrderItems.find((i) => i.value === this.settings.androidAutoBrowseSeriesSequenceOrder)
       return item?.text || 'Error'
     },
+    volumeBoostItems() {
+      return this.volumeBoostDbOptions.map((db) => ({
+        text: db ? `+${db} dB` : this.$strings.LabelOff,
+        value: db
+      }))
+    },
+    volumeBoostOption() {
+      const item = this.volumeBoostItems.find((i) => i.value === this.settings.volumeBoost)
+      return item?.text || 'Error'
+    },
     moreMenuItems() {
       if (this.moreMenuSetting === 'shakeSensitivity') return this.shakeSensitivityItems
       else if (this.moreMenuSetting === 'hapticFeedback') return this.hapticFeedbackItems
@@ -483,6 +506,7 @@ export default {
       else if (this.moreMenuSetting === 'streamingUsingCellular') return this.streamingUsingCellularItems
       else if (this.moreMenuSetting === 'androidAutoBrowseSeriesSequenceOrder') return this.androidAutoBrowseSeriesSequenceOrderItems
       else if (this.moreMenuSetting === 'autoDeleteDelay') return this.autoDeleteDelayItems
+      else if (this.moreMenuSetting === 'volumeBoost') return this.volumeBoostItems
       else if (this.moreMenuSetting === 'jumpForward')
         return this.jumpForwardSecondsOptions.map((value) => ({
           text: this.getJumpLabel(value),
@@ -504,6 +528,7 @@ export default {
       if (this.moreMenuSetting === 'streamingUsingCellular') return this.settings.streamingUsingCellular
       if (this.moreMenuSetting === 'androidAutoBrowseSeriesSequenceOrder') return this.settings.androidAutoBrowseSeriesSequenceOrder
       if (this.moreMenuSetting === 'autoDeleteDelay') return this.autoDelete.delayDays
+      if (this.moreMenuSetting === 'volumeBoost') return this.settings.volumeBoost
       if (this.moreMenuSetting === 'shakeSensitivity') return this.settings.shakeSensitivity
       if (this.moreMenuSetting === 'hapticFeedback') return this.settings.hapticFeedback
       return null
@@ -556,6 +581,10 @@ export default {
       this.moreMenuSetting = 'streamingUsingCellular'
       this.showMoreMenuDialog = true
     },
+    showVolumeBoostOptions() {
+      this.moreMenuSetting = 'volumeBoost'
+      this.showMoreMenuDialog = true
+    },
     showAutoDeleteOptions() {
       this.moreMenuSetting = 'autoDeleteDelay'
       this.showMoreMenuDialog = true
@@ -586,6 +615,9 @@ export default {
         this.saveSettings()
       } else if (this.moreMenuSetting === 'androidAutoBrowseSeriesSequenceOrder') {
         this.settings.androidAutoBrowseSeriesSequenceOrder = action
+        this.saveSettings()
+      } else if (this.moreMenuSetting === 'volumeBoost') {
+        this.settings.volumeBoost = action
         this.saveSettings()
       } else if (this.moreMenuSetting === 'autoDeleteDelay') {
         this.autoDelete.delayDays = action
@@ -742,6 +774,7 @@ export default {
 
       this.settings.androidAutoBrowseLimitForGrouping = deviceSettings.androidAutoBrowseLimitForGrouping
       this.settings.androidAutoBrowseSeriesSequenceOrder = deviceSettings.androidAutoBrowseSeriesSequenceOrder || 'ASC'
+      this.settings.volumeBoost = deviceSettings.volumeBoost || 0
     },
     async loadDebugLogs() {
       if (!this.isAndroid) return

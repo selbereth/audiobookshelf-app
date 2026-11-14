@@ -17,6 +17,10 @@ class PlayerListener(var playerNotificationService:PlayerNotificationService) : 
     var lazyIsPlaying: Boolean = false
   }
 
+  override fun onAudioSessionIdChanged(audioSessionId: Int) {
+    playerNotificationService.onAudioSessionIdChanged(audioSessionId)
+  }
+
   override fun onPlayerError(error: PlaybackException) {
     val errorMessage = error.message ?: "Unknown Error"
     Log.e(tag, "onPlayerError $errorMessage")
