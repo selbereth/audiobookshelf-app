@@ -4,7 +4,7 @@ import android.media.audiofx.LoudnessEnhancer
 import android.util.Log
 import com.google.android.exoplayer2.C
 
-const val MAX_VOLUME_BOOST_DB = 12
+const val MAX_VOLUME_BOOST_DB = 40
 
 /**
  * Amplifies the local player's output past its normal maximum volume using a LoudnessEnhancer

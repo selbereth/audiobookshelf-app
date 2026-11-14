@@ -387,7 +387,7 @@ export default {
           value: 'DESC'
         }
       ],
-      volumeBoostDbOptions: [0, 3, 6, 9, 12]
+      volumeBoostDbOptions: [0, 5, 10, 15, 20, 25, 30, 35, 40]
     }
   },
   computed: {

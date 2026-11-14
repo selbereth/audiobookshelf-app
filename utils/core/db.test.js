@@ -115,6 +115,15 @@ const tests = {
     assert.strictEqual(out.deviceSettings.languageCode, 'en-us')
     assert.deepStrictEqual(t.deviceCalls, [{ settingsChanged: true }])
   },
+  async 'volume boost: the top step (40 dB) is kept by save and startup'() {
+    const t = setup()
+    const out = await t.call('updateDeviceSettings', { ...rules.defaultDeviceSettings(), volumeBoost: 40 })
+    assert.strictEqual(out.deviceSettings.volumeBoost, 40)
+    t.put('device', 'data', { serverConnectionConfigs: [], lastServerConnectionConfigId: null, lastPlaybackSession: null, deviceSettings: { ...rules.defaultDeviceSettings(), volumeBoost: 35 } })
+    await t.mod.startup()
+    assert.strictEqual(t.get('device', 'data').deviceSettings.volumeBoost, 35)
+    assert.strictEqual(rules.normalizeDeviceData({ deviceSettings: { ...rules.defaultDeviceSettings(), volumeBoost: 40 } }).data.deviceSettings.volumeBoost, 40)
+  },
   async 'local items: lookups'() {
     const t = setup()
     t.put('localLibraryItems', 'l1', book('l1'))
