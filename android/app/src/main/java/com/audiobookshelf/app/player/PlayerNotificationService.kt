@@ -236,7 +236,12 @@ class PlayerNotificationService : MediaBrowserServiceCompat() {
     // The JS core (hidden web view) lives as long as the process
     com.audiobookshelf.app.core.CoreHost.start(ctx)
     com.audiobookshelf.app.core.PlayerConnector.service = this
-    DeviceManager.onSettingsChanged = { Handler(Looper.getMainLooper()).post { setMediaSessionConnectorPlaybackActions() } }
+    DeviceManager.onSettingsChanged = {
+      Handler(Looper.getMainLooper()).post {
+        setMediaSessionConnectorPlaybackActions()
+        applyVolumeBoost()
+      }
+    }
 
     // Initialize widget
     DeviceManager.initializeWidgetUpdater(ctx)
