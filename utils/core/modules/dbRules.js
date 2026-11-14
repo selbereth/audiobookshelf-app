@@ -42,7 +42,8 @@ export function defaultDeviceSettings() {
     downloadUsingCellular: 'ALWAYS',
     streamingUsingCellular: 'ALWAYS',
     androidAutoBrowseLimitForGrouping: 100,
-    androidAutoBrowseSeriesSequenceOrder: 'ASC'
+    androidAutoBrowseSeriesSequenceOrder: 'ASC',
+    volumeBoost: 0 // dB of gain past max volume (Android local player), 0 is off
   }
 }
 
