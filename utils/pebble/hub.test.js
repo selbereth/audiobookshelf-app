@@ -150,6 +150,23 @@ test('start: one format starts at once; two formats answer with the choice; the 
   assert.deepStrictEqual(sent.map((m) => m.State), [STATE.LOADING, STATE.PLAYING])
 })
 
+test('read aloud is not started from the top of the book when the place on the server cannot be read', async () => {
+  for (const [response, starts] of [[{ ok: false }, false], [{ ok: false, status: 500 }, false], [{ ok: false, status: 404 }, true]]) {
+    sent.length = 0
+    const { native, calls } = fakeNative()
+    const get = native.api.get
+    native.api.get = async (path) => (path.startsWith('/api/me/progress/') ? response : get(path))
+    const hub = createHub(native)
+    await hub.handle(cmd(CMD.BROWSE, { [KEY.ListLevel.id]: LEVEL.SHELVES, [KEY.ArgItem.id]: 0 }))
+    sent.length = 0
+    await hub.handle(cmd(CMD.START_BOOK, { [KEY.ArgShelf.id]: 0, [KEY.ArgItem.id]: 1, [KEY.ArgFormat.id]: 1 }))
+    const start = calls.find((c) => c[0] === 'tts.startNew')
+    assert.strictEqual(!!start, starts)
+    if (start) assert.strictEqual(start[1].cfi, '') // never read: from the start is right
+    else assert.strictEqual(sent[0].State, STATE.ERROR)
+  }
+})
+
 test('a book that is gone, and a hello right after opening, are answered sensibly', async () => {
   sent.length = 0
   const { native } = fakeNative()

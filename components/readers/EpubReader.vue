@@ -14,6 +14,7 @@
 import ePub from 'epubjs'
 import ttsSession, { ebookMeta } from '@/utils/tts/ttsSession'
 import { saveEbookProgress } from '@/utils/ebookProgress'
+import { addHistoryEvent, loadHistory, EVENT } from '@/utils/ebookHistory'
 
 /** The status bar and navigation bar showing or hiding changes the window height by less than this */
 const SYSTEM_BAR_CHANGE = 120
@@ -407,8 +408,46 @@ export default {
       this.rendition.themes.font(settings.font)
       this.rendition.spread(settings.spread || 'auto')
     },
+    /** The book the history belongs to: the same id read aloud uses (utils/tts/ttsSession.js) */
+    historyItemId() {
+      return this.serverLibraryItemId || this.localLibraryItemId
+    },
+    /** Marks where the reader is now in the history, before they leave it (a chapter, an older place) so they can come back */
+    markHistory(name) {
+      // Still on the page the book opened at without a saved position: that is not a place the reader was
+      if (!this.keepProgress || !this.rendition || this.inittingDisplay || this.holdStartSave) return
+      const live = this.rendition.currentLocation()
+      const cfi = live?.start?.cfi || this.currentLocationCfi
+      if (!cfi) return
+      addHistoryEvent(this.historyItemId(), name, cfi, live?.end?.percentage ?? null)
+    },
+    /** The reading history, newest first, each with the chapter it is in */
+    getHistory() {
+      return loadHistory(this.historyItemId())
+        .map((event) => ({ ...event, chapter: this.chapterLabelFor(event.cfi) }))
+        .reverse()
+    },
+    chapterLabelFor(cfi) {
+      try {
+        const href = this.book?.spine?.get(cfi)?.href
+        if (!href) return ''
+        const flat = (items) => items.flatMap((item) => [item, ...flat(item.subitems || [])])
+        const file = (h) => String(h).split('#')[0]
+        const match = flat(this.chapters).find((item) => file(item.href) === file(href))
+        return match?.label?.trim() || ''
+      } catch (error) {
+        return ''
+      }
+    },
     goToChapter(href) {
+      this.markHistory(EVENT.JUMP)
       return this.rendition?.display(href)
+    },
+    /** Back (or forward) to a place in the history */
+    goToHistory(cfi) {
+      if (!this.rendition || !cfi) return
+      this.markHistory(EVENT.JUMP)
+      return this.rendition.display(cfi)
     },
     prev() {
       if (this.rendition) {

@@ -137,13 +137,36 @@ object TtsHeadless {
       }
       try {
         when (method) {
+          // The book goes to the page in pieces: a whole book as one base64 string needed three copies of it in memory and a 113 MB book
+          // ran the app out of memory. It is written to a file first (never held whole), then read back one piece at a time.
           "fetchBook" -> thread { // a download: not on the main thread
             try {
-              reply(true, JSONObject().put("base64", Base64.encodeToString(readBook(input), Base64.NO_WRAP)).toString())
+              val file = bookFile()
+              copyBookTo(input, file)
+              reply(true, JSONObject().put("size", file.length()).toString())
             } catch (e: Exception) {
               Log.e(TAG, "Could not read the book", e)
               reply(false, "Could not read the book: ${e.message}")
             }
+          }
+          "fetchBookChunk" -> thread {
+            try {
+              val file = bookFile()
+              java.io.RandomAccessFile(file, "r").use { f ->
+                val offset = input.getLong("offset")
+                val bytes = ByteArray(minOf(input.getInt("length").toLong(), file.length() - offset).toInt().coerceAtLeast(0))
+                f.seek(offset)
+                f.readFully(bytes)
+                reply(true, JSONObject().put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP)).toString())
+              }
+            } catch (e: Exception) {
+              Log.e(TAG, "Could not read a piece of the book", e)
+              reply(false, "Could not read the book: ${e.message}")
+            }
+          }
+          "releaseBook" -> {
+            bookFile().delete()
+            reply(true)
           }
           "patchProgress" -> {
             // /api/me/progress/<libraryItemId>
@@ -239,13 +262,17 @@ object TtsHeadless {
       }
     }
 
-    private fun readBook(input: JSONObject): ByteArray {
+    private fun bookFile() = java.io.File(context.cacheDir, "tts-headless-book.epub")
+
+    /** Writes the EPUB (the download, or the server's copy) to `target` without holding it in memory */
+    private fun copyBookTo(input: JSONObject, target: java.io.File) {
       if (input.optBoolean("isLocal")) {
         val item = DeviceManager.dbManager.getLocalLibraryItem(input.optString("localLibraryItemId"))
           ?: throw IllegalStateException("The downloaded book is gone")
         val file = item.localFiles.firstOrNull { it.mimeType == "application/epub+zip" } ?: throw IllegalStateException("The downloaded EPUB is gone")
-        return context.contentResolver.openInputStream(Uri.parse(file.contentUrl))?.use { it.readBytes() }
+        context.contentResolver.openInputStream(Uri.parse(file.contentUrl))?.use { source -> target.outputStream().use { source.copyTo(it) } }
           ?: throw IllegalStateException("Could not open the downloaded EPUB")
+        return
       }
       // The app's screen sets the server connection when it starts: without it (the watch started this) there is no server address
       if (DeviceManager.serverConnectionConfig == null) {
@@ -259,7 +286,8 @@ object TtsHeadless {
       val request = Request.Builder().url("${DeviceManager.serverAddress}${input.getString("url")}").addHeader("Authorization", "Bearer ${DeviceManager.token}").build()
       http.newCall(request).execute().use { response ->
         if (!response.isSuccessful) throw IllegalStateException("The server answered ${response.code}")
-        return response.body?.bytes() ?: throw IllegalStateException("The server sent no book")
+        val body = response.body ?: throw IllegalStateException("The server sent no book")
+        body.byteStream().use { source -> target.outputStream().use { source.copyTo(it) } }
       }
     }
 

@@ -353,6 +353,7 @@
   "MessageMediaNotLinkedToServer": "Media is not linked to an Audiobookshelf server. No progress will be synced.",
   "MessageNoBookmarks": "No Bookmarks",
   "MessageNoChapters": "No Chapters",
+  "MessageNoHistory": "No History",
   "MessageNoCollections": "No Collections",
   "MessageNoItems": "No Items",
   "MessageNoItemsFound": "No items found",

@@ -360,12 +360,16 @@ export function createHub(native, { log = () => {}, now = () => Date.now() } = {
   async function ebookPlace(book) {
     if (book.localLibraryItemId) return (await native.local.ebookProgress(book.localLibraryItemId)) || {}
     const response = await native.api.get(`/api/me/progress/${book.libraryItemId}`)
-    return response.ok ? response.json || {} : {}
+    if (response.ok) return response.json || {}
+    // 404: the server has no place for this book yet, so the start is right. Any other failure (offline, signed out, a server error) means
+    // the place is not known: reading from the start would be saved over the real one when it stops
+    return response.status === 404 ? {} : { unknown: true }
   }
 
   async function startEpub(book) {
     await native.audio.pause() // only one thing owns playback
     const place = await ebookPlace(book)
+    if (place.unknown) return errorStatus('Could not get your place in the book: try again when online')
     const cfi = String(place.ebookLocation || '').startsWith('epubcfi') ? place.ebookLocation : ''
     await native.tts.startNew({
       libraryItemId: book.libraryItemId,
