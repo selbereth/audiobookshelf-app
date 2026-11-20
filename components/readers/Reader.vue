@@ -10,6 +10,9 @@
         <button v-if="isComic || isEpub" type="button" class="inline-flex mx-2" @click.stop="clickTOCBtn">
           <span class="material-symbols text-2xl text-fg">format_list_bulleted</span>
         </button>
+        <button v-if="isEpub" type="button" class="inline-flex mx-2" @click.stop="clickHistoryBtn">
+          <span class="material-symbols text-2xl text-fg">history</span>
+        </button>
         <button v-if="isEpub" type="button" class="inline-flex mx-2" @click.stop="clickTtsBtn">
           <span class="material-symbols text-2xl text-fg">headphones</span>
         </button>
@@ -52,6 +55,31 @@
           <div v-if="!chapters.length" class="flex h-full items-center justify-center">
             <p class="text-xl">{{ $strings.MessageNoChapters }}</p>
           </div>
+        </div>
+      </div>
+    </modals-fullscreen-modal>
+
+    <!-- reading history modal: where read aloud started and stopped and where you were before a jump. Tap one to go back there -->
+    <modals-fullscreen-modal v-model="showHistoryModal" :theme="ereaderTheme">
+      <div class="flex items-end justify-between h-20 px-4 pb-2">
+        <h1 class="text-lg">{{ $strings.ButtonHistory }}</h1>
+        <button class="flex" @click.stop="showHistoryModal = false">
+          <span class="material-symbols">close</span>
+        </button>
+      </div>
+      <div class="w-full overflow-y-auto overflow-x-hidden h-full max-h-[calc(100vh-85px)]">
+        <div class="w-full px-4">
+          <div v-if="!historyEvents.length" class="flex items-center justify-center py-8">
+            <p class="text-xl">{{ $strings.MessageNoHistory }}</p>
+          </div>
+          <button v-for="(evt, index) in historyEvents" :key="index" type="button" class="w-full py-3 flex items-center text-left opacity-80 hover:opacity-100" @click.stop="goToHistory(evt.cfi)">
+            <span class="material-symbols fill pr-3">{{ historyIcon(evt.name) }}</span>
+            <div class="min-w-0 flex-grow">
+              <p class="truncate">{{ evt.chapter || evt.name }}</p>
+              <p class="text-xs opacity-70">{{ evt.name }} · {{ $formatDate(evt.timestamp, 'MMM dd, HH:mm') }}</p>
+            </div>
+            <p v-if="evt.progress !== null && evt.progress !== undefined" class="text-sm pl-2">{{ Math.round(evt.progress * 100) }}%</p>
+          </button>
         </div>
       </div>
     </modals-fullscreen-modal>
@@ -141,6 +169,8 @@ export default {
       showSettingsModal: false,
       comicHasMetadata: false,
       chapters: [],
+      showHistoryModal: false,
+      historyEvents: [],
       isInittingWatchVolume: false,
       ereaderSettings: {
         theme: 'dark',
@@ -348,6 +378,18 @@ export default {
 
       this.initWatchVolume()
       this.initKeepScreenAwake()
+    },
+    clickHistoryBtn() {
+      this.hideToolbar()
+      this.historyEvents = this.$refs.readerComponent?.getHistory?.() || []
+      this.showHistoryModal = true
+    },
+    goToHistory(cfi) {
+      this.showHistoryModal = false
+      this.$refs.readerComponent?.goToHistory?.(cfi)
+    },
+    historyIcon(name) {
+      return name === 'Start' ? 'play_circle' : name === 'Stop' ? 'pause_circle' : 'commit'
     },
     clickTtsBtn() {
       this.hideToolbar()

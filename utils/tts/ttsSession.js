@@ -5,6 +5,7 @@ import * as Capacitor from '@/plugins/capacitor'
 import { sentenceStream, earlierSections } from './sentenceStream'
 import { ChunkSender } from './chunkSender'
 import { saveEbookProgress } from '../ebookProgress'
+import { addHistoryEvent, EVENT } from '../ebookHistory'
 
 const SAVE_PROGRESS_INTERVAL = 15000
 const PERSIST_INTERVAL = 2000
@@ -374,6 +375,7 @@ class TtsSession {
     })
     if (meta.keepProgress) this.persist(true)
     else this.forgetPersisted()
+    this.addHistory(EVENT.START, startCfi)
 
     this.nativeListeners = [
       await AbsTts.addListener('sentence', (data) => this.onSentence(data)),
@@ -382,6 +384,7 @@ class TtsSession {
       await AbsTts.addListener('state', (data) => {
         this.store.commit('tts/setPlaying', data.playing)
         if (!data.playing) {
+          this.addHistory(EVENT.STOP, this.currentCfi)
           this.saveProgressNow()
           this.persist(true)
         }
@@ -669,6 +672,18 @@ class TtsSession {
     const m = this.meta
     if (!m?.keepProgress) return
     await saveEbookProgress(this.app, { localLibraryItemId: m.localLibraryItemId, serverLibraryItemId: m.serverLibraryItemId }, payload)
+  }
+
+  /** A mark in the book's reading history (see utils/ebookHistory.js): read aloud started or stopped here */
+  addHistory(name, cfi) {
+    const m = this.meta
+    if (!m?.keepProgress || !cfi) return
+    let progress = null
+    if (this.book?.locations?.length()) {
+      const pct = this.book.locations.percentageFromCfi(cfi)
+      if (typeof pct === 'number' && !isNaN(pct) && pct >= 0) progress = pct
+    }
+    addHistoryEvent(m.serverLibraryItemId || m.localLibraryItemId, name, cfi, progress)
   }
 
   saveProgressNow() {

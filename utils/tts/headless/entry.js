@@ -34,10 +34,19 @@ const toast = { error: (message) => console.error('[headless]', message), info: 
 ttsSession.init(store, toast, app)
 // The file comes from native code (local file or the server, with the signed in user's token)
 ttsSession.loadBookData = async (meta) => {
-  const { base64 } = await callNative('fetchBook', { url: meta.url, isLocal: meta.isLocal, localLibraryItemId: meta.localLibraryItemId })
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  // Native writes the book to a file; it is read here in pieces (one big message ran a 113 MB book out of memory)
+  const { size } = await callNative('fetchBook', { url: meta.url, isLocal: meta.isLocal, localLibraryItemId: meta.localLibraryItemId })
+  const bytes = new Uint8Array(size)
+  const PIECE = 512 * 1024
+  try {
+    for (let offset = 0; offset < size; offset += PIECE) {
+      const { base64 } = await callNative('fetchBookChunk', { offset, length: PIECE })
+      const binary = atob(base64)
+      for (let i = 0; i < binary.length; i++) bytes[offset + i] = binary.charCodeAt(i)
+    }
+  } finally {
+    callNative('releaseBook').catch(() => {})
+  }
   return bytes.buffer
 }
 
